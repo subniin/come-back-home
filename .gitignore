@@ -1,0 +1,25 @@
+# 로컬 도구, 개인 자료
+harness/
+.claude/
+reports/
+
+# Android
+android/**/build/
+.gradle/
+local.properties
+*.apk
+*.jks
+*.keystore
+.idea/
+
+# PlatformIO
+.pio/
+.vscode/
+
+# 센서 기록, 로그
+*.csv
+*.log
+
+# 문서 원본
+*.hwp
+*.pdf
