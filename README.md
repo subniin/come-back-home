@@ -6,7 +6,6 @@
 - `android/` 안드로이드 앱 (BLE Central, 센서·GPS 기록, 시험 화면)
 - `firmware/` ESP32 펌웨어 (PlatformIO). 알고리즘은 `src/core/`, 연결부는 `src/main.cpp`
 - `docs/` 통신 규약(`protocol.md`), 햅틱 신호 체계(`haptic_spec.md`)
-- `firmware/esp32_ble_v1/` 앱 시험용 BLE 스켈레톤 (자체 UUID, 6바이트 패킷). 통신 방식이 확정되면 정리한다
 
 ## 브랜치
 - `main` 항상 빌드되는 상태. PR로만 합친다
