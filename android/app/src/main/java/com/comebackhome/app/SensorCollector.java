@@ -29,6 +29,8 @@ import java.util.Locale;
  */
 final class SensorCollector implements SensorEventListener, LocationListener {
     private static final int PERIOD_US = 20_000; // 50Hz
+    /** ESP32로 보내는 헤딩 출처. false = ROTATION_VECTOR(자북 기준), true = GAME_ROTATION_VECTOR(실내 상대 헤딩, 시작 방향이 임의) */
+    static final boolean HEADING_FROM_GAME_RV = false;
     private static final int[] TYPES = {
             Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_GYROSCOPE, Sensor.TYPE_MAGNETIC_FIELD,
             Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GAME_ROTATION_VECTOR};
@@ -45,6 +47,8 @@ final class SensorCollector implements SensorEventListener, LocationListener {
     // 화면 표시용: 센서 스레드가 쓰고 메인 스레드가 읽는다
     private volatile long accCount;
     private volatile float azimuthDeg = Float.NaN;
+    // ESP32 송신용: 가속도 크기(g)와 헤딩(0~360, 시계방향). 아직 없으면 NaN
+    private volatile float accG = Float.NaN, headingDeg = Float.NaN;
     private volatile Location lastFix;
     private volatile String missing = "";
 
@@ -89,11 +93,14 @@ final class SensorCollector implements SensorEventListener, LocationListener {
         sensorLog.row(e.timestamp, name(type), v[0], v[1], v[2], v.length > 3 ? v[3] : "");
         if (type == Sensor.TYPE_ACCELEROMETER) {
             accCount++;
-        } else if (type == Sensor.TYPE_ROTATION_VECTOR) {
-            // 화면 확인용. 허리 장착 방향이 정해지면 remapCoordinateSystem을 추가한다
+            accG = (float) (Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) / SensorManager.GRAVITY_EARTH);
+        } else if (type == Sensor.TYPE_ROTATION_VECTOR || type == Sensor.TYPE_GAME_ROTATION_VECTOR) {
+            // 허리 장착 방향이 정해지면 remapCoordinateSystem을 추가한다
             SensorManager.getRotationMatrixFromVector(rot, v);
             SensorManager.getOrientation(rot, orient);
-            azimuthDeg = (float) Math.toDegrees(orient[0]);
+            float deg = (float) Math.toDegrees(orient[0]);
+            if (type == Sensor.TYPE_ROTATION_VECTOR) azimuthDeg = deg; // 화면 확인용
+            if ((type == Sensor.TYPE_GAME_ROTATION_VECTOR) == HEADING_FROM_GAME_RV) headingDeg = (deg + 360f) % 360f;
         }
     }
 
@@ -119,6 +126,14 @@ final class SensorCollector implements SensorEventListener, LocationListener {
 
     @Override
     public void onProviderDisabled(String provider) {
+    }
+
+    float accG() {
+        return accG;
+    }
+
+    float headingDeg() {
+        return headingDeg;
     }
 
     String status() {

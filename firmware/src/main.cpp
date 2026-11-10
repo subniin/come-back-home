@@ -157,13 +157,32 @@ void handleButton(uint32_t now) {
   }
 }
 
+// 줄 하나 처리 (시리얼/BLE 공용)
+// IMU <accG> <headDeg>: 50Hz 센서 입력이라 로그 없이 조용히 처리, 잘못된 줄은 무시
+// 그 외 줄: 텍스트 명령으로 ctrl에 넘김
+void handleLine(const char* line, uint32_t now) {
+  if (strncmp(line, "IMU", 3) == 0 && (line[3] == ' ' || line[3] == 0)) {
+    const char* p = line + 3;
+    char* end;
+    float acc = strtof(p, &end);
+    if (end == p) return;
+    p = end;
+    float head = strtof(p, &end);
+    if (end == p) return;
+    ctrl.onHeading(head);
+    if (stepDet.update(acc, now)) ctrl.onStep(head, now);
+    return;
+  }
+  ctrl.onCommand(line, now);
+}
+
 void readSerial(uint32_t now) {
   static char buf[96];
   static int len = 0;
   while (Serial.available()) {
     char ch = (char)Serial.read();
     if (ch == '\n' || ch == '\r') {
-      if (len) { buf[len] = 0; ctrl.onCommand(buf, now); len = 0; }
+      if (len) { buf[len] = 0; handleLine(buf, now); len = 0; }
     } else if (len < (int)sizeof(buf) - 1) {
       buf[len++] = ch;
     }
@@ -176,7 +195,7 @@ void loop() {
   // 1) 명령 (시리얼 / BLE)
   readSerial(now);
   CmdMsg m;
-  while (xQueueReceive(cmdQueue, &m, 0) == pdTRUE) ctrl.onCommand(m.s, now);
+  while (xQueueReceive(cmdQueue, &m, 0) == pdTRUE) handleLine(m.s, now);
 
   // 2) 연결 상태
   ctrl.onLink(bleConnected, now);
