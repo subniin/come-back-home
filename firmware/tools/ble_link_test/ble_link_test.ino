@@ -1,15 +1,16 @@
 // ESP32 BLE 연결 테스트 스케치 (앱 <-> ESP32 링크 확인용)
 //
 // 목적: 안드로이드 앱의 BleLink 와 통신이 되는지 단독으로 확인한다.
-//       모터 구동, 경로 계산은 하지 않는다. (그건 firmware/src/main.cpp)
+//       경로 기록, 모터 구동은 하지 않는다. (그건 firmware/src/main.cpp)
 // 업로드: Arduino IDE 에서 이 파일을 열고 보드 "ESP32 Dev Module" 선택 후 업로드.
 //         시리얼 모니터 115200.
-// 프로토콜: 앱 BleLink.java / core/GuidancePacket.java 와 같아야 한다.
-//   - 서비스 UUID, 가이던스 특성(앱 -> ESP32, WRITE), 버튼 특성(ESP32 -> 앱, NOTIFY)
-//   - 패킷 6바이트 little-endian: int16 turnAngle, uint16 distanceCm, uint8 state, uint8 seq
-//   - 버튼 notify 1바이트: 0 = 짧게, 1 = 길게(1초 이상)
-// 주의: firmware/src/main.cpp 는 Nordic UART(NUS) 방식이라 UUID 가 다르다.
-//       둘 중 어느 쪽으로 통일할지는 팀 결정 후 정리한다.
+// 프로토콜: firmware/src/main.cpp 와 앱 BleLink.java 가 쓰는 Nordic UART Service(NUS) 텍스트 방식.
+//   - 서비스 6E400001, RX 6E400002(앱 -> ESP32, WRITE), TX 6E400003(ESP32 -> 앱, NOTIFY)
+//   - 한 줄은 '\n' 으로 끝나는 텍스트. TX 는 20바이트 조각으로 나눠 보낸다.
+//   - 앱이 보내는 줄: 'TRACK ON' (연결 직후 1회), 모드 버튼 명령, 'IMU <accG> <headDeg>' (50Hz)
+//   - 이 스케치가 돌려주는 줄: 'TRACK,ON' (TRACK ON 응답), 'ECHO,<받은 줄>' (IMU 제외),
+//     'IMU,<초당 수신 수>' (1초마다), 'BTN,SHORT' / 'BTN,LONG' (BOOT 버튼)
+// 앱 화면의 수신 로그에 위 줄이 보이면 양방향 링크가 정상이다.
 
 #include <Arduino.h>
 #include <BLEDevice.h>
@@ -18,69 +19,116 @@
 #include <BLE2902.h>
 #include <cstring>
 
-// ===== 앱(BleLink.java)과 동일한 UUID =====
-static const char* SERVICE_UUID  = "8c5a8775-542e-4447-a6d6-572d509d4938";
-static const char* GUIDANCE_UUID = "8b2e38a4-d5bb-41a2-9378-7dd07e3d64dc";
-static const char* BUTTON_UUID   = "383de663-08ec-437e-b633-58292aec7c29";
+// ===== Nordic UART Service (앱 BleLink.java 와 동일) =====
+static const char* SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
+static const char* RX_UUID      = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";  // 앱 -> ESP32
+static const char* TX_UUID      = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";  // ESP32 -> 앱
 
 // ===== 설정 =====
-static const char*    DEVICE_NAME        = "CBH-ESP32";
-static const uint32_t RX_TIMEOUT_MS      = 500;   // 이 시간 동안 패킷이 없으면 끊긴 것으로 본다
+static const char*    DEVICE_NAME        = "ComeBackHome";
 static const uint32_t READVERTISE_MS     = 300;   // 연결 해제 후 광고 재시작까지 대기
 static const uint32_t BUTTON_DEBOUNCE_MS = 30;
-static const uint32_t BUTTON_LONG_MS     = 1000;
+static const uint32_t BUTTON_LONG_MS     = 1500;  // main.cpp 와 같은 길게 누름 기준
 static const int      BUTTON_PIN         = 0;     // BOOT 버튼
+static const size_t   CHUNK              = 20;    // 기본 MTU(23) 기준 notify 최대 길이
+static const size_t   LINE_MAX           = 96;
 
-// ===== 앱에서 보내는 6바이트 패킷 (ESP32 는 little-endian 이라 그대로 복사한다) =====
-struct __attribute__((packed)) GuidancePacket {
-  int16_t  turnAngle;
-  uint16_t distanceCm;
-  uint8_t  state;
-  uint8_t  seq;
-};
-static_assert(sizeof(GuidancePacket) == 6, "Packet size must be 6 bytes");
-
+// ===== 상태 (BLE 콜백 스레드와 loop 가 함께 쓴다) =====
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+char     rxBuf[512];            // 콜백이 받은 바이트를 loop 로 넘기는 링 버퍼
+volatile size_t rxHead = 0, rxTail = 0;
 
-GuidancePacket pkt = {0, 0, 0, 0};
-volatile bool     hasNew            = false;
-volatile uint32_t lastRxMs          = 0;      // 0 = 아직 받은 적 없음
 volatile bool     connected         = false;
 volatile bool     connectionChanged = false;
 volatile uint32_t disconnectedAtMs  = 0;      // 0 = 재광고 필요 없음
 
-BLECharacteristic* buttonChar = nullptr;
+BLECharacteristic* txChar = nullptr;
 
-// ===== BLE 연결 이벤트 =====
 class ServerCb : public BLEServerCallbacks {
   void onConnect(BLEServer*) override {
     connected = true;
-    lastRxMs = 0;
     connectionChanged = true;
   }
   void onDisconnect(BLEServer*) override {
     connected = false;
     connectionChanged = true;
-    disconnectedAtMs = millis() ? millis() : 1;
+    uint32_t now = millis();
+    disconnectedAtMs = now ? now : 1;
   }
 };
 
-// ===== 안드로이드 데이터 수신 =====
-class GuidanceCb : public BLECharacteristicCallbacks {
+class RxCb : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic* c) override {
-    if (c->getLength() != sizeof(GuidancePacket)) return;  // 로그는 loop 에서 (콜백 안 출력 피함)
+    const uint8_t* d = c->getData();
+    size_t n = c->getLength();
     portENTER_CRITICAL(&mux);
-    memcpy(&pkt, c->getData(), sizeof(pkt));
-    lastRxMs = millis();
-    hasNew = true;
+    for (size_t i = 0; i < n; i++) {
+      size_t next = (rxHead + 1) % sizeof(rxBuf);
+      if (next == rxTail) break;  // 가득 차면 버린다
+      rxBuf[rxHead] = (char)d[i];
+      rxHead = next;
+    }
     portEXIT_CRITICAL(&mux);
   }
 };
 
-// 방향(앱 기준 각도)을 8개 구역으로 변환. 0 = 정면, 시계 방향 45도씩.
-int sectorOf(int16_t turnAngle) {
-  int a = ((turnAngle % 360) + 360) % 360;
-  return ((a + 22) / 45) % 8;
+// 한 줄을 20바이트씩 나눠 notify 한다 (끝에 '\n' 을 붙인다)
+void sendLine(const char* s) {
+  if (!connected || !txChar) return;
+  char line[LINE_MAX + 2];
+  snprintf(line, sizeof(line), "%s\n", s);
+  size_t len = strlen(line);
+  for (size_t off = 0; off < len; off += CHUNK) {
+    size_t n = min(CHUNK, len - off);
+    txChar->setValue((uint8_t*)line + off, n);
+    txChar->notify();
+    delay(5);  // 연속 notify 가 버퍼에서 밀리지 않게 한다
+  }
+}
+
+// loop 에서 한 줄이 완성될 때마다 호출된다
+void onLine(const char* line, uint32_t now) {
+  static uint32_t imuCount = 0, windowStart = 0;
+  if (strncmp(line, "IMU", 3) == 0) {   // 50Hz 라서 하나하나 출력하지 않고 초당 개수만 센다
+    imuCount++;
+  } else {
+    Serial.printf("RX: %s\n", line);
+    char out[LINE_MAX + 8];
+    if (strcmp(line, "TRACK ON") == 0) snprintf(out, sizeof(out), "TRACK,ON");
+    else snprintf(out, sizeof(out), "ECHO,%.80s", line);
+    sendLine(out);
+  }
+  if (now - windowStart >= 1000) {
+    if (imuCount) {
+      Serial.printf("IMU %u/s\n", (unsigned)imuCount);
+      char out[24];
+      snprintf(out, sizeof(out), "IMU,%u", (unsigned)imuCount);
+      sendLine(out);
+    }
+    imuCount = 0;
+    windowStart = now;
+  }
+}
+
+void pollRx(uint32_t now) {
+  static char line[LINE_MAX];
+  static size_t len = 0;
+  for (;;) {
+    char ch;
+    portENTER_CRITICAL(&mux);
+    bool has = rxTail != rxHead;
+    if (has) {
+      ch = rxBuf[rxTail];
+      rxTail = (rxTail + 1) % sizeof(rxBuf);
+    }
+    portEXIT_CRITICAL(&mux);
+    if (!has) break;
+    if (ch == '\n') {
+      if (len) { line[len] = 0; onLine(line, now); len = 0; }
+    } else if (ch != '\r' && len < LINE_MAX - 1) {
+      line[len++] = ch;
+    }
+  }
 }
 
 void setup() {
@@ -89,7 +137,7 @@ void setup() {
   pinMode(BUTTON_PIN, INPUT_PULLUP);
 
   Serial.println("======================");
-  Serial.println("ComeBackHome BLE link test");
+  Serial.println("ComeBackHome BLE link test (NUS)");
   Serial.println("======================");
 
   BLEDevice::init(DEVICE_NAME);
@@ -97,15 +145,14 @@ void setup() {
   server->setCallbacks(new ServerCb());
   BLEService* service = server->createService(SERVICE_UUID);
 
-  // 휴대폰 -> ESP32
-  BLECharacteristic* guidance = service->createCharacteristic(
-      GUIDANCE_UUID,
-      BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
-  guidance->setCallbacks(new GuidanceCb());
+  // 앱 -> ESP32
+  BLECharacteristic* rx = service->createCharacteristic(
+      RX_UUID, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
+  rx->setCallbacks(new RxCb());
 
-  // ESP32 -> 휴대폰
-  buttonChar = service->createCharacteristic(BUTTON_UUID, BLECharacteristic::PROPERTY_NOTIFY);
-  buttonChar->addDescriptor(new BLE2902());
+  // ESP32 -> 앱
+  txChar = service->createCharacteristic(TX_UUID, BLECharacteristic::PROPERTY_NOTIFY);
+  txChar->addDescriptor(new BLE2902());
 
   service->start();
 
@@ -133,45 +180,19 @@ void loop() {
     Serial.println("광고 재시작");
   }
 
-  // 수신 데이터 확인
-  GuidancePacket p;
-  bool fresh;
-  uint32_t rx;
-  portENTER_CRITICAL(&mux);
-  p = pkt;
-  fresh = hasNew;
-  hasNew = false;
-  rx = lastRxMs;
-  portEXIT_CRITICAL(&mux);
+  pollRx(now);
 
-  if (fresh) {
-    Serial.printf("RX seq=%u angle=%d dist=%ucm state=%u sector=%d\n",
-                  p.seq, p.turnAngle, p.distanceCm, p.state, sectorOf(p.turnAngle));
-  }
-
-  // 패킷 수신 상태 변화만 출력
-  static bool previousAlive = false;
-  const bool alive = connected && rx != 0 && (now - rx <= RX_TIMEOUT_MS);
-  if (alive != previousAlive) {
-    previousAlive = alive;
-    if (alive) Serial.println("가이던스 수신 정상");
-    else if (connected) Serial.println("500ms 이상 수신 없음");
-  }
-
-  // BOOT 버튼: 떼는 순간 짧게(0)/길게(1) 구분해서 notify
+  // BOOT 버튼: 떼는 순간 짧게/길게 구분해서 notify
   static bool wasDown = false;
   static uint32_t downMs = 0;
   const bool down = digitalRead(BUTTON_PIN) == LOW;
   if (down && !wasDown) downMs = now;
   if (!down && wasDown && now - downMs > BUTTON_DEBOUNCE_MS) {
-    uint8_t type = (now - downMs >= BUTTON_LONG_MS) ? 1 : 0;
-    if (connected) {
-      buttonChar->setValue(&type, 1);
-      buttonChar->notify();
-    }
-    Serial.printf("버튼 이벤트: %u\n", type);
+    bool isLong = now - downMs >= BUTTON_LONG_MS;
+    Serial.printf("버튼 이벤트: %s\n", isLong ? "LONG" : "SHORT");
+    sendLine(isLong ? "BTN,LONG" : "BTN,SHORT");
   }
   wasDown = down;
 
-  delay(5);
+  delay(2);
 }
