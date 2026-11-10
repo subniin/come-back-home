@@ -21,7 +21,7 @@ using namespace chh;
 // ---------------- 핀 배치 (하드웨어 담당과 맞출 것) ----------------
 // 모터 번호: 0=정면(배꼽) 1=오른앞 2=오른쪽 3=오른뒤 4=뒤(등) 5=왼뒤 6=왼쪽 7=왼앞
 // ※ 모터는 반드시 트랜지스터/드라이버(예: ULN2803)를 거쳐 연결. GPIO 직결 금지
-static const uint8_t MOTOR_PINS[8] = {13, 14, 27, 26, 25, 33, 32, 23};
+static const uint8_t MOTOR_PINS[8] = {25, 14, 26, 13, 27, 33, 32, 23};
 static const uint8_t BUTTON_PIN = 0;  // DevKit의 BOOT 버튼 (짧게: 시작/복귀/취소, 길게: 실내↔실외)
 
 // ---------------- BLE (Nordic UART Service: 'nRF Connect', 'Serial Bluetooth Terminal' 앱으로 바로 테스트) ----
