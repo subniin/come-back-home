@@ -10,7 +10,6 @@ import android.graphics.drawable.RippleDrawable;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
-import android.widget.SeekBar;
 import android.widget.TextView;
 
 /**
@@ -21,7 +20,7 @@ final class Ui {
     static final int NEUTRAL = 0, ACCENT = 1, DANGER = 2;
     private static final int RADIUS_DP = 12;
 
-    final int bg, surface, text, textSub, border, track, accent, onAccent, danger, dangerBg, chipBg;
+    final int bg, surface, text, textSub, border, accent, onAccent, danger, dangerBg, chipBg;
     final boolean night;
     private final Context ctx;
     private final float density;
@@ -36,7 +35,6 @@ final class Ui {
         text = c(night ? "#ECEFF1" : "#111827");
         textSub = c(night ? "#A7B0B7" : "#4B5563");
         border = c(night ? "#2B3238" : "#D1D5DB");
-        track = c(night ? "#3B444B" : "#9CA3AF"); // 슬라이더 빈 구간은 테두리보다 진하게
         accent = c(night ? "#5EEAD4" : "#0F766E");
         onAccent = c(night ? "#06201C" : "#FFFFFF");
         danger = c(night ? "#FDA29B" : "#B42318");
@@ -132,16 +130,6 @@ final class Ui {
         t.setPadding(dp(12), dp(10), dp(12), dp(10));
         t.setBackground(shape(dangerBg, 0));
         return t;
-    }
-
-    SeekBar seek(int max) {
-        SeekBar s = new SeekBar(ctx);
-        s.setMax(max);
-        s.setPadding(dp(16), dp(12), dp(16), dp(12)); // 손가락으로 잡기 쉽게 세로 영역을 키운다
-        s.setThumbTintList(ColorStateList.valueOf(accent));
-        s.setProgressTintList(ColorStateList.valueOf(accent));
-        s.setProgressBackgroundTintList(ColorStateList.valueOf(track));
-        return s;
     }
 
     LinearLayout.LayoutParams full(int topDp) {
