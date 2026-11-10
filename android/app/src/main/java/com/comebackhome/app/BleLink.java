@@ -22,32 +22,41 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelUuid;
 
-import com.comebackhome.app.core.GuidancePacket;
+import com.comebackhome.app.core.LineProtocol;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.text.SimpleDateFormat;
+import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
 /**
- * 허리 ESP32와 BLE 연결 (정의서 3장). 폰이 Central.
- * 스캔 → 연결 → 서비스 탐색 → 버튼 Notify 구독 → 10Hz 쓰기.
+ * 허리 ESP32와 BLE 연결. 폰이 Central. ESP32 펌웨어(main.cpp)의 Nordic UART Service(NUS)를 쓴다.
+ * 스캔 → 연결 → 서비스 탐색 → TX Notify 구독 → TRACK ON → 20ms 루프로 명령/IMU 송신.
+ *  - 앱→기기(RX 특성): '\n'으로 끝나는 텍스트 한 줄. 사용자 명령이 IMU보다 먼저 나간다.
+ *  - 기기→앱(TX 특성): 20바이트 조각으로 오므로 '\n'까지 모아 한 줄로 만들어 리스너에 넘긴다.
  * 연결이 의도치 않게 끊기면 같은 기기로 재연결을 반복한다.
  * 모든 상태 변경은 메인 스레드에서 한다.
- *
- * 무수신 시 모터 정지(0.5초)는 ESP32 펌웨어 규칙이다 (기준안 5.2). 이 클래스는 끊기면 송신을 멈출 뿐이다.
  */
 @SuppressLint("MissingPermission") // 권한은 MainActivity에서 확인한 뒤 호출한다
 final class BleLink {
-    static final UUID SERVICE = UUID.fromString("8c5a8775-542e-4447-a6d6-572d509d4938");
-    static final UUID GUIDANCE_CHAR = UUID.fromString("8b2e38a4-d5bb-41a2-9378-7dd07e3d64dc");
-    static final UUID BUTTON_CHAR = UUID.fromString("383de663-08ec-437e-b633-58292aec7c29");
+    static final UUID SERVICE = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
+    static final UUID RX_CHAR = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E"); // 앱 → 기기
+    static final UUID TX_CHAR = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E"); // 기기 → 앱
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
-    private static final long PERIOD_MS = 100; // 10Hz (정의서 3.3)
+    private static final long PERIOD_MS = 20;  // 50Hz IMU (펌웨어 걸음 감지 기준)
     private static final long RETRY_MS = 1000; // 재연결 간격 (제안)
+    private static final int MAX_QUEUE = 32;
+
+    /** 기기에서 온 한 줄. 메인 스레드에서 호출된다 */
+    interface LineListener {
+        void onLine(String line);
+    }
 
     private final Context ctx;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -55,30 +64,37 @@ final class BleLink {
     private ScanCallback scanCb;
     private BluetoothDevice device;
     private BluetoothGatt gatt;
-    private BluetoothGattCharacteristic guidance, button;
+    private BluetoothGattCharacteristic rx, tx;
     private EventLog events;
     private File logDir;
     private boolean wantConnected; // true인 동안 끊기면 재연결
     private String fatal;          // 재연결해도 소용없는 실패 사유
     private String logError;
-    private int seq, sent, failed, buttons, retries;
+    private int sent, failed, lines, retries;
 
-    // 시험용 송신 값. MainActivity 슬라이더가 바꾼다 (둘 다 메인 스레드). 실제 안내 값은 2-1에서 연결
-    // 기본 state 0 = 진동 없음 (실기 안전)
-    private int turnDeg, distCm = 1500, state;
-
-    /** 다음 패킷부터 적용한다 */
-    void setTestValues(int turnDeg, int distCm, int state) {
-        this.turnDeg = turnDeg;
-        this.distCm = distCm;
-        this.state = state;
-    }
+    private LineListener listener;
+    private final ArrayDeque<String> commands = new ArrayDeque<>();
+    private final LineProtocol.LineAssembler assembler = new LineProtocol.LineAssembler();
 
     /** 화면 표시용. 메인 스레드가 쓰고 메인 스레드가 읽는다 */
     private volatile String status = "정지됨";
 
     BleLink(Context ctx) {
         this.ctx = ctx;
+    }
+
+    void setLineListener(LineListener l) {
+        listener = l;
+    }
+
+    /**
+     * 명령 한 줄을 보낸다 (개행은 자동으로 붙인다). 메인 스레드에서 호출한다.
+     * 연결 전이면 버리고 false. 쓰기 실패한 명령은 재시도하지 않는다.
+     */
+    boolean send(String cmd) {
+        if (rx == null || commands.size() >= MAX_QUEUE) return false;
+        commands.add(cmd);
+        return true;
     }
 
     String status() {
@@ -97,7 +113,7 @@ final class BleLink {
         }
         wantConnected = true;
         fatal = null;
-        seq = sent = failed = buttons = retries = 0;
+        sent = failed = lines = retries = 0;
         openLog();
         scanner = adapter.getBluetoothLeScanner();
         scanCb = new ScanCallback() {
@@ -175,8 +191,10 @@ final class BleLink {
                     g.discoverServices();
                 } else if (newState == BluetoothProfile.STATE_DISCONNECTED || gattStatus != BluetoothGatt.GATT_SUCCESS) {
                     main.removeCallbacks(sendLoop);
-                    guidance = null;
-                    button = null;
+                    rx = null;
+                    tx = null;
+                    commands.clear();
+                    assembler.reset();
                     gatt = null;
                     g.close();
                     ev("ble", "disconnected", gattStatus);
@@ -197,25 +215,26 @@ final class BleLink {
             main.post(() -> {
                 if (g != gatt) return;
                 BluetoothGattService svc = g.getService(SERVICE);
-                BluetoothGattCharacteristic c = svc == null ? null : svc.getCharacteristic(GUIDANCE_CHAR);
-                if (gattStatus != BluetoothGatt.GATT_SUCCESS || c == null) {
+                BluetoothGattCharacteristic r = svc == null ? null : svc.getCharacteristic(RX_CHAR);
+                BluetoothGattCharacteristic t = svc == null ? null : svc.getCharacteristic(TX_CHAR);
+                if (gattStatus != BluetoothGatt.GATT_SUCCESS || r == null || t == null) {
                     fatal = "서비스 없음: 펌웨어 확인";
                     wantConnected = false; // 재연결해도 같은 결과
                     ev("ble", "no_service");
                     g.disconnect();
                     return;
                 }
-                c.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
-                guidance = c;
-                button = svc.getCharacteristic(BUTTON_CHAR);
-                subscribeButton(g);
+                r.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
+                rx = r;
+                tx = t;
+                subscribeTx(g);
             });
         }
 
         @Override
         public void onDescriptorWrite(BluetoothGatt g, BluetoothGattDescriptor d, int gattStatus) {
             main.post(() -> {
-                if (g != gatt || guidance == null) return;
+                if (g != gatt || rx == null) return;
                 ev("ble", gattStatus == BluetoothGatt.GATT_SUCCESS ? "notify_on" : "notify_fail");
                 startSending(); // 구독 쓰기가 끝난 뒤에 송신 시작 (GATT 작업은 한 번에 하나)
             });
@@ -225,7 +244,7 @@ final class BleLink {
         @Override
         public void onCharacteristicChanged(BluetoothGatt g, BluetoothGattCharacteristic c, byte[] value) {
             byte[] v = value.clone();
-            main.post(() -> onButton(v));
+            main.post(() -> onChunk(v));
         }
 
         @Override
@@ -234,15 +253,15 @@ final class BleLink {
             byte[] v = c.getValue();
             if (v == null) return;
             byte[] copy = v.clone();
-            main.post(() -> onButton(copy));
+            main.post(() -> onChunk(copy));
         }
     };
 
-    /** 버튼 Notify를 켠다. 못 켜면 버튼 없이 송신만 시작한다 */
-    private void subscribeButton(BluetoothGatt g) {
-        BluetoothGattDescriptor cccd = button == null ? null : button.getDescriptor(CCCD);
-        if (cccd == null || !g.setCharacteristicNotification(button, true) || !writeCccd(g, cccd)) {
-            ev("ble", "no_button_notify");
+    /** TX Notify를 켠다. 못 켜면 수신 없이 송신만 시작한다 */
+    private void subscribeTx(BluetoothGatt g) {
+        BluetoothGattDescriptor cccd = tx.getDescriptor(CCCD);
+        if (cccd == null || !g.setCharacteristicNotification(tx, true) || !writeCccd(g, cccd)) {
+            ev("ble", "no_tx_notify");
             startSending();
         }
     }
@@ -260,40 +279,53 @@ final class BleLink {
         retries = 0;
         status = "연결됨";
         ev("ble", "connected");
+        commands.clear();
+        commands.add("TRACK ON"); // 걸음마다 STEP,t,x,y,heading 로그를 받는다
         main.removeCallbacks(sendLoop);
         main.post(sendLoop);
     }
 
-    /** 정의서 6장: eventType 0 = 짧게 누름, 1 = 길게 누름. 모드 전환 연결은 2-3 */
-    private void onButton(byte[] v) {
-        if (v.length < 1) return;
-        buttons++;
-        ev("btn", v[0] & 0xFF);
+    private void onChunk(byte[] chunk) {
+        List<String> got = assembler.feed(chunk);
+        for (String line : got) {
+            lines++;
+            ev("rx", line);
+            if (listener != null) listener.onLine(line);
+        }
     }
 
     private final Runnable sendLoop = new Runnable() {
         @Override
         public void run() {
-            if (guidance == null) return;
-            int s = seq;
-            byte[] pkt = GuidancePacket.encode(turnDeg, distCm, state, s);
-            seq = (seq + 1) & 0xFF;
-            boolean ok = write(pkt);
-            if (ok) sent++;
-            else failed++;
-            ev("pkt", s, turnDeg, distCm, state, ok ? 1 : 0);
-            status = "연결됨: 전송 " + sent + ", 실패 " + failed + ", 버튼 " + buttons;
+            if (rx == null) return;
+            String cmd = commands.poll();
+            String out = null;
+            if (cmd != null) {
+                out = cmd;
+                ev("tx", cmd);
+            } else if (GuideService.collector != null) { // 센서 기록 중일 때만 IMU 송신
+                float acc = GuideService.collector.accG(), head = GuideService.collector.headingDeg();
+                if (!Float.isNaN(acc) && !Float.isNaN(head)) out = LineProtocol.imuLine(acc, head);
+            }
+            if (out != null) {
+                if (write((out + "\n").getBytes(StandardCharsets.UTF_8))) sent++;
+                else {
+                    failed++; // ponytail: 실패한 명령은 재시도하지 않고 로그만 남긴다
+                    ev("tx_fail", out);
+                }
+            }
+            status = "연결됨: 송신 " + sent + ", 실패 " + failed + ", 수신 " + lines + "줄";
             main.postDelayed(this, PERIOD_MS);
         }
     };
 
-    private boolean write(byte[] pkt) {
+    private boolean write(byte[] data) {
         if (Build.VERSION.SDK_INT >= 33) {
-            return gatt.writeCharacteristic(guidance, pkt, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
+            return gatt.writeCharacteristic(rx, data, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
                     == BluetoothStatusCodes.SUCCESS;
         }
-        guidance.setValue(pkt);
-        return gatt.writeCharacteristic(guidance);
+        rx.setValue(data);
+        return gatt.writeCharacteristic(rx);
     }
 
     private void openLog() {

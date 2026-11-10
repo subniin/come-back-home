@@ -14,27 +14,29 @@ import android.view.WindowInsetsController;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.SeekBar;
 import android.widget.TextView;
 
+import com.comebackhome.app.core.LineProtocol;
+
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 
-/** 시험 화면: 센서 기록, ESP32 연결, 진동 시험 값 송신. */
+/** 시험 화면: 센서 기록, ESP32 연결, 모드 명령, 기록 경로와 복귀 안내, 수신 로그. */
 public class MainActivity extends Activity {
     private static final long REFRESH_MS = 250;
-    private static final String[] STATE_SHORT = {"0 대기", "1 아웃", "2 기록", "3 복귀"};
-    private static final String[] STATE_DESC = {"대기, 진동 없음", "아웃사이드, 진동", "인사이드 기록, 진동 없음", "백트래킹, 진동"};
+    private static final int MAX_LOG_LINES = 50;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private BleLink ble;
     private Ui u;
 
     private TextView recChip, recDetail, bleChip, bleDetail;
-    private TextView angleVal, distVal, stateDesc, warn;
-    private final Button[] stateBtns = new Button[4];
-    // 시험 송신 값 (BleLink로 전달). 기본은 진동 없는 state 0
-    private int testAngle, testDist = 1500, testState;
+    private TextView pathStatus, logView;
+    private PathView path;
+    private final ArrayDeque<String> logLines = new ArrayDeque<>();
+    private boolean logDirty;
+    private String phaseText = "대기", guideText = "";
 
     private final Runnable refresh = new Runnable() {
         @Override
@@ -52,6 +54,11 @@ public class MainActivity extends Activity {
             u.setChip(bleChip, b[0], chipKind(b[0]));
             bleDetail.setText(b.length > 1 ? b[1] : "");
             bleDetail.setVisibility(b.length > 1 ? View.VISIBLE : View.GONE); // 비었을 때 빈 공간 방지
+            pathStatus.setText(guideText.isEmpty() ? phaseText : phaseText + "\n" + guideText);
+            if (logDirty) { // 줄마다 갱신하지 않고 주기마다 한 번만 그린다
+                logDirty = false;
+                logView.setText(String.join("\n", logLines));
+            }
             main.postDelayed(this, REFRESH_MS);
         }
     };
@@ -99,67 +106,33 @@ public class MainActivity extends Activity {
         bleCard.addView(bleBtns, u.rowOf(12, 8));
         bleCard.addView(bleDetail, u.full(12));
 
-        // 진동 시험: turnAngle(-180~180), distanceCm(0~3000, 10cm 단위), state(0~3)
-        SeekBar angleBar = u.seek(360);
-        angleBar.setProgress(testAngle + 180);
-        angleBar.setOnSeekBarChangeListener(new Change() {
-            @Override
-            void onChange(int progress) {
-                testAngle = progress - 180;
-                pushTest();
-            }
-        });
-        angleVal = u.mono("", 28, u.text);
+        // 모드 명령 (ESP32 펌웨어 명령, 개행은 BleLink가 붙인다)
+        LinearLayout modeRows = new LinearLayout(this);
+        modeRows.setOrientation(LinearLayout.VERTICAL);
+        modeRows.addView(cmdRow("START", "RETURN", "CANCEL"), u.rowOf(0, 8));
+        modeRows.addView(cmdRow("ENV IN", "ENV OUT", "AUTO"), u.rowOf(8, 8));
+        modeRows.addView(cmdRow("DIR 0", "DIR 1", "DIR 2", "DIR 3"), u.rowOf(8, 8));
+        modeRows.addView(cmdRow("DIR 4", "DIR 5", "DIR 6", "DIR 7"), u.rowOf(8, 8));
+        modeRows.addView(cmdRow("OFF", "STATUS"), u.rowOf(8, 8));
 
-        int[][] presetRows = {{0, 45, 90, 135}, {180, -135, -90, -45}}; // 8방향 모터 시험용
-        LinearLayout presets = new LinearLayout(this);
-        presets.setOrientation(LinearLayout.VERTICAL);
-        for (int[] angles : presetRows) {
-            LinearLayout r = u.row();
-            for (int a : angles) {
-                Button b = u.button(a + "°", false);
-                b.setOnClickListener(v -> angleBar.setProgress(a + 180));
-                r.addView(b, u.cell(8));
-            }
-            presets.addView(r, u.rowOf(8, 8));
-        }
+        LinearLayout mode = u.card("모드");
+        mode.addView(modeRows, u.full(12));
+        mode.addView(u.banner("RETURN과 DIR은 모터가 진동합니다"), u.full(12));
 
-        SeekBar distBar = u.seek(300);
-        distBar.setProgress(testDist / 10);
-        distBar.setOnSeekBarChangeListener(new Change() {
-            @Override
-            void onChange(int progress) {
-                testDist = progress * 10;
-                pushTest();
-            }
-        });
-        distVal = u.mono("", 22, u.text);
+        // 기록 경로 + 복귀 안내
+        pathStatus = u.mono("", 14, u.text);
+        path = new PathView(this, u);
+        LinearLayout pathCard = u.card("경로");
+        pathCard.addView(pathStatus, u.full(12));
+        pathCard.addView(path, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, u.dp(280)));
 
-        LinearLayout stateRow = u.row();
-        for (int i = 0; i < stateBtns.length; i++) {
-            int state = i;
-            stateBtns[i] = u.button(STATE_SHORT[i], false);
-            stateBtns[i].setOnClickListener(v -> {
-                testState = state;
-                pushTest();
-            });
-            stateRow.addView(stateBtns[i], u.cell(8));
-        }
-        stateDesc = u.label("", 14, u.textSub, false);
-        warn = u.banner("이 모드에서는 모터가 진동합니다");
+        // 수신 로그
+        logView = u.mono("", 12, u.textSub);
+        logView.setTextIsSelectable(true);
+        LinearLayout logCard = u.card("수신 로그");
+        logCard.addView(logView, u.full(12));
 
-        LinearLayout test = u.card("진동 시험");
-        test.addView(u.label("방향 turnAngle", 14, u.textSub, false), u.wrap(16));
-        test.addView(angleVal, u.wrap(0));
-        test.addView(angleBar, u.full(0));
-        test.addView(presets, u.full(4));
-        test.addView(u.label("거리 distance", 14, u.textSub, false), u.wrap(20));
-        test.addView(distVal, u.wrap(0));
-        test.addView(distBar, u.full(0));
-        test.addView(u.label("모드 state", 14, u.textSub, false), u.wrap(20));
-        test.addView(stateRow, u.rowOf(8, 8));
-        test.addView(stateDesc, u.full(8));
-        test.addView(warn, u.full(12));
+        ble.setLineListener(this::onLine);
 
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
@@ -168,7 +141,9 @@ public class MainActivity extends Activity {
         col.addView(u.label("시험 도구", 15, u.textSub, false), u.wrap(2));
         col.addView(rec, u.full(16));
         col.addView(bleCard, u.full(12));
-        col.addView(test, u.full(12));
+        col.addView(mode, u.full(12));
+        col.addView(pathCard, u.full(12));
+        col.addView(logCard, u.full(12));
 
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(u.bg);
@@ -180,8 +155,6 @@ public class MainActivity extends Activity {
                     | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
             getWindow().getInsetsController().setSystemBarsAppearance(u.night ? 0 : light, light);
         }
-        pushTest();
-
         requestNeededPermissions();
     }
 
@@ -207,32 +180,48 @@ public class MainActivity extends Activity {
         ble.connect();
     }
 
-    /** 시험 값을 BleLink에 넘기고 화면에 표시한다 */
-    private void pushTest() {
-        ble.setTestValues(testAngle, testDist, testState);
-        angleVal.setText(testAngle + "°");
-        distVal.setText(testDist + " cm");
-        for (int i = 0; i < stateBtns.length; i++) u.setFilled(stateBtns[i], i == testState);
-        stateDesc.setText(STATE_DESC[testState]);
-        warn.setVisibility(testState == 1 || testState == 3 ? View.VISIBLE : View.GONE);
+    /** 같은 너비의 명령 버튼 한 줄. 버튼 글자가 곧 보내는 명령이다 */
+    private LinearLayout cmdRow(String... cmds) {
+        LinearLayout r = u.row();
+        for (String cmd : cmds) {
+            Button b = u.button(cmd, false);
+            b.setOnClickListener(v -> {
+                if (!ble.send(cmd)) addLog("! 연결 안 됨: " + cmd);
+            });
+            r.addView(b, u.cell(8));
+        }
+        return r;
     }
 
-    /** SeekBar 값 변경만 받는 리스너 */
-    private abstract static class Change implements SeekBar.OnSeekBarChangeListener {
-        abstract void onChange(int progress);
-
-        @Override
-        public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
-            onChange(progress);
+    /** 기기에서 온 한 줄 (메인 스레드) */
+    private void onLine(String line) {
+        addLog(line);
+        LineProtocol.Step st = LineProtocol.parseStep(line);
+        if (st != null) {
+            path.addStep(st);
+            return;
         }
-
-        @Override
-        public void onStartTrackingTouch(SeekBar bar) {
+        LineProtocol.Guide g = LineProtocol.parseGuide(line);
+        if (g != null) {
+            path.setGuide(g);
+            guideText = String.format(java.util.Locale.US, "방향 %d, 경유점 %d, 남은 %.1fm", g.dir, g.wp, g.remain);
+            return;
         }
-
-        @Override
-        public void onStopTrackingTouch(SeekBar bar) {
+        LineProtocol.Phase ph = LineProtocol.parsePhase(line);
+        if (ph != null) {
+            phaseText = ph.raw;
+            if (ph.name.equals("RECORDING")) path.clear(); // 새 기록 시작
+            if (!ph.name.equals("RETURNING")) { // 복귀가 끝나거나 취소되면 안내를 지운다
+                path.setGuide(null);
+                guideText = "";
+            }
         }
+    }
+
+    private void addLog(String line) {
+        logLines.add(line);
+        while (logLines.size() > MAX_LOG_LINES) logLines.poll();
+        logDirty = true;
     }
 
     /** Android 12 이상은 BLUETOOTH_SCAN/CONNECT 런타임 권한, 11 이하는 위치 권한으로 스캔 */
