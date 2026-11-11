@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace = 'com.comebackhome'
+    namespace = 'com.comebackhome.sensor'
     compileSdk = 35
 
     defaultConfig {
-        applicationId = 'com.comebackhome'
+        applicationId = 'com.comebackhome.sensor'
         minSdk = 29
         targetSdk = 35
         versionCode = 1
@@ -18,4 +18,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+dependencies {
+    implementation project(':core')
 }

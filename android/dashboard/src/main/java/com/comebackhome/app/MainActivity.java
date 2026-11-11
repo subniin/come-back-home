@@ -2,7 +2,6 @@ package com.comebackhome.app;
 
 import android.Manifest;
 import android.app.Activity;
-import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -22,7 +21,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 
-/** 시험 화면: 센서 기록, ESP32 연결, 모드 명령, 기록 경로와 복귀 안내, 수신 로그. */
+/** 대시보드: ESP32 연결, 모드 명령, 기록 경로와 복귀 안내, 수신 로그. IMU는 센싱 앱이 보낸다. */
 public class MainActivity extends Activity {
     private static final long REFRESH_MS = 250;
     private static final int MAX_LOG_LINES = 50;
@@ -31,7 +30,7 @@ public class MainActivity extends Activity {
     private BleLink ble;
     private Ui u;
 
-    private TextView recChip, recDetail, bleChip, bleDetail;
+    private TextView bleChip, bleDetail;
     private TextView pathStatus, logView;
     private PathView path;
     private final ArrayDeque<String> logLines = new ArrayDeque<>();
@@ -41,15 +40,6 @@ public class MainActivity extends Activity {
     private final Runnable refresh = new Runnable() {
         @Override
         public void run() {
-            SensorCollector c = GuideService.collector;
-            String err = GuideService.lastError;
-            if (c != null) {
-                u.setChip(recChip, "기록 중", Ui.ACCENT);
-                recDetail.setText(c.status());
-            } else {
-                u.setChip(recChip, "정지됨", err != null ? Ui.DANGER : Ui.NEUTRAL);
-                recDetail.setText(err != null ? "오류: " + err : "기록을 시작하면 센서와 GPS 상태가 여기에 표시됩니다");
-            }
             String[] b = ble.status().split("\n", 2); // 첫 줄은 상태, 나머지는 로그 경로와 오류
             u.setChip(bleChip, b[0], chipKind(b[0]));
             bleDetail.setText(b.length > 1 ? b[1] : "");
@@ -69,24 +59,6 @@ public class MainActivity extends Activity {
         requestWindowFeature(Window.FEATURE_NO_TITLE); // 기본 액션바 대신 화면 안의 제목을 쓴다
         ble = new BleLink(this);
         u = new Ui(this);
-
-        // 센서 기록
-        Button start = u.button("기록 시작", true);
-        start.setOnClickListener(v -> startSession());
-        Button stop = u.button("기록 종료", false);
-        stop.setOnClickListener(v -> stopService(new Intent(this, GuideService.class)));
-        recChip = u.chip();
-        u.setChip(recChip, "정지됨", Ui.NEUTRAL);
-        recDetail = u.mono("", 13, u.textSub);
-
-        LinearLayout recBtns = u.row();
-        recBtns.addView(start, u.cell(8));
-        recBtns.addView(stop, u.cell(8));
-
-        LinearLayout rec = u.card("센서 기록");
-        rec.addView(recChip, u.wrap(12));
-        rec.addView(recBtns, u.rowOf(12, 8));
-        rec.addView(recDetail, u.full(12));
 
         // ESP32 연결
         Button bleConnect = u.button("연결", true);
@@ -138,9 +110,8 @@ public class MainActivity extends Activity {
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(u.dp(16), u.dp(16), u.dp(16), u.dp(24));
         col.addView(u.label("ComeBackHome", 26, u.text, true));
-        col.addView(u.label("시험 도구", 15, u.textSub, false), u.wrap(2));
-        col.addView(rec, u.full(16));
-        col.addView(bleCard, u.full(12));
+        col.addView(u.label("대시보드", 15, u.textSub, false), u.wrap(2));
+        col.addView(bleCard, u.full(16));
         col.addView(mode, u.full(12));
         col.addView(pathCard, u.full(12));
         col.addView(logCard, u.full(12));
@@ -162,14 +133,6 @@ public class MainActivity extends Activity {
         if (s.startsWith("연결됨")) return Ui.ACCENT;
         if (s.contains("실패") || s.contains("없음") || s.contains("꺼짐") || s.contains("끊김")) return Ui.DANGER;
         return Ui.NEUTRAL;
-    }
-
-    private void startSession() {
-        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            requestNeededPermissions();
-            return;
-        }
-        startForegroundService(new Intent(this, GuideService.class));
     }
 
     private void connectBle() {
@@ -235,14 +198,11 @@ public class MainActivity extends Activity {
 
     private void requestNeededPermissions() {
         List<String> p = new ArrayList<>();
-        p.add(Manifest.permission.ACCESS_FINE_LOCATION);
-        p.add(Manifest.permission.ACCESS_COARSE_LOCATION);
         if (Build.VERSION.SDK_INT >= 31) {
             p.add(Manifest.permission.BLUETOOTH_SCAN);
             p.add(Manifest.permission.BLUETOOTH_CONNECT);
-        }
-        if (Build.VERSION.SDK_INT >= 33) {
-            p.add(Manifest.permission.POST_NOTIFICATIONS);
+        } else {
+            p.add(Manifest.permission.ACCESS_FINE_LOCATION);
         }
         requestPermissions(p.toArray(new String[0]), 1);
     }

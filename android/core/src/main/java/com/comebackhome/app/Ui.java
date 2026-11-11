@@ -16,16 +16,16 @@ import android.widget.TextView;
  * 시험 화면의 색과 모양. 라이트/다크는 시스템 설정을 따른다.
  * 강조색은 하나, 모서리 반경은 하나로 통일한다. 버튼 높이는 터치하기 쉬운 48dp.
  */
-final class Ui {
-    static final int NEUTRAL = 0, ACCENT = 1, DANGER = 2;
+public final class Ui {
+    public static final int NEUTRAL = 0, ACCENT = 1, DANGER = 2;
     private static final int RADIUS_DP = 12;
 
-    final int bg, surface, text, textSub, border, accent, onAccent, danger, dangerBg, chipBg;
-    final boolean night;
+    public final int bg, surface, text, textSub, border, accent, onAccent, danger, dangerBg, chipBg;
+    public final boolean night;
     private final Context ctx;
     private final float density;
 
-    Ui(Context ctx) {
+    public Ui(Context ctx) {
         this.ctx = ctx;
         density = ctx.getResources().getDisplayMetrics().density;
         night = (ctx.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
@@ -46,7 +46,7 @@ final class Ui {
         return Color.parseColor(hex);
     }
 
-    int dp(int v) {
+    public int dp(int v) {
         return Math.round(v * density);
     }
 
@@ -58,7 +58,7 @@ final class Ui {
         return d;
     }
 
-    TextView label(String s, float sp, int color, boolean bold) {
+    public TextView label(String s, float sp, int color, boolean bold) {
         TextView t = new TextView(ctx);
         t.setText(s);
         t.setTextSize(sp);
@@ -68,14 +68,14 @@ final class Ui {
     }
 
     /** 숫자와 로그 표시용 고정폭 글꼴 */
-    TextView mono(String s, float sp, int color) {
+    public TextView mono(String s, float sp, int color) {
         TextView t = label(s, sp, color, false);
         t.setTypeface(Typeface.MONOSPACE);
         return t;
     }
 
     /** 제목이 있는 세로 카드 */
-    LinearLayout card(String title) {
+    public LinearLayout card(String title) {
         LinearLayout c = new LinearLayout(ctx);
         c.setOrientation(LinearLayout.VERTICAL);
         c.setBackground(shape(surface, border));
@@ -84,13 +84,13 @@ final class Ui {
         return c;
     }
 
-    LinearLayout row() {
+    public LinearLayout row() {
         LinearLayout r = new LinearLayout(ctx);
         r.setOrientation(LinearLayout.HORIZONTAL);
         return r;
     }
 
-    Button button(String label, boolean filled) {
+    public Button button(String label, boolean filled) {
         Button b = new Button(ctx);
         b.setText(label);
         b.setAllCaps(false);
@@ -106,33 +106,33 @@ final class Ui {
     }
 
     /** 채움 버튼은 선택됨/주 동작, 테두리 버튼은 보조 동작 */
-    void setFilled(Button b, boolean filled) {
+    public void setFilled(Button b, boolean filled) {
         b.setTextColor(filled ? onAccent : text);
         b.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33808080),
                 filled ? shape(accent, 0) : shape(surface, border), shape(0xFF000000, 0)));
     }
 
-    TextView chip() {
+    public TextView chip() {
         TextView t = label("", 15, text, true);
         t.setPadding(dp(12), dp(6), dp(12), dp(6));
         t.setGravity(Gravity.CENTER);
         return t;
     }
 
-    void setChip(TextView t, String s, int kind) {
+    public void setChip(TextView t, String s, int kind) {
         t.setText(s);
         t.setTextColor(kind == ACCENT ? onAccent : kind == DANGER ? danger : text);
         t.setBackground(shape(kind == ACCENT ? accent : kind == DANGER ? dangerBg : chipBg, 0));
     }
 
-    TextView banner(String s) {
+    public TextView banner(String s) {
         TextView t = label(s, 15, danger, true);
         t.setPadding(dp(12), dp(10), dp(12), dp(10));
         t.setBackground(shape(dangerBg, 0));
         return t;
     }
 
-    LinearLayout.LayoutParams full(int topDp) {
+    public LinearLayout.LayoutParams full(int topDp) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         p.topMargin = dp(topDp);
@@ -140,14 +140,14 @@ final class Ui {
     }
 
     /** cell()이 칸마다 가진 바깥 여백만큼 줄을 넓혀, 첫 칸과 끝 칸이 카드 안쪽 여백에 맞게 한다 */
-    LinearLayout.LayoutParams rowOf(int topDp, int gapDp) {
+    public LinearLayout.LayoutParams rowOf(int topDp, int gapDp) {
         LinearLayout.LayoutParams p = full(topDp);
         p.setMarginStart(-dp(gapDp) / 2);
         p.setMarginEnd(-dp(gapDp) / 2);
         return p;
     }
 
-    LinearLayout.LayoutParams wrap(int topDp) {
+    public LinearLayout.LayoutParams wrap(int topDp) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         p.topMargin = dp(topDp);
@@ -155,7 +155,7 @@ final class Ui {
     }
 
     /** 한 줄에서 같은 너비를 나눠 갖는 칸 */
-    LinearLayout.LayoutParams cell(int gapDp) {
+    public LinearLayout.LayoutParams cell(int gapDp) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         p.setMarginStart(dp(gapDp) / 2);
         p.setMarginEnd(dp(gapDp) / 2);

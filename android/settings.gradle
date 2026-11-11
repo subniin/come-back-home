@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = 'ComeBackHome'
-include ':app'
+include ':core', ':sensor', ':dashboard'

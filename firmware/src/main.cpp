@@ -34,7 +34,8 @@ StepDetector stepDet;
 
 BLEServer*         bleServer = nullptr;
 BLECharacteristic* txChar = nullptr;
-volatile bool      bleConnected = false;
+volatile bool      bleConnected = false;  // 한 대라도 연결되어 있으면 true
+volatile uint8_t   bleClients = 0;
 
 struct CmdMsg { char s[96]; };
 QueueHandle_t cmdQueue;  // BLE 콜백(다른 태스크) → loop()로 명령 전달
@@ -61,9 +62,15 @@ void logLine(const char* s) {
 }
 
 class ServerCB : public BLEServerCallbacks {
-  void onConnect(BLEServer*) override { bleConnected = true; }
+  // 폰 2대(센싱 앱 + 대시보드 앱)가 동시에 붙는다. 연결 수를 세고 광고를 계속 켜 둔다.
+  void onConnect(BLEServer* s) override {
+    bleClients++;
+    bleConnected = true;
+    s->startAdvertising();  // 이미 한 대 붙어도 다음 폰이 찾을 수 있게
+  }
   void onDisconnect(BLEServer* s) override {
-    bleConnected = false;
+    if (bleClients > 0) bleClients--;
+    bleConnected = bleClients > 0;
     s->startAdvertising();  // 재연결 허용
   }
 };

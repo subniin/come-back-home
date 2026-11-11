@@ -14,10 +14,10 @@
 
     <application
         android:allowBackup="false"
-        android:label="ComeBackHome">
+        android:label="CBH 센싱">
 
         <activity
-            android:name=".app.MainActivity"
+            android:name="com.comebackhome.app.MainActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -26,7 +26,7 @@
         </activity>
 
         <service
-            android:name=".app.GuideService"
+            android:name="com.comebackhome.app.GuideService"
             android:exported="false"
             android:foregroundServiceType="location" />
     </application>
