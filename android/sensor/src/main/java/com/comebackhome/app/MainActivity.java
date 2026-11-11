@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowInsetsController;
@@ -25,25 +26,30 @@ public class MainActivity extends Activity {
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private Ui u;
-    private TextView recChip, recDetail, bleChip, bleDetail;
+    private TextView bigLabel, bigSub, sensorState, bleState, recDetail, bleDetail;
+    private View bigDot;
 
     private final Runnable refresh = new Runnable() {
         @Override
         public void run() {
             SensorCollector c = GuideService.collector;
             String err = GuideService.lastError;
-            if (c != null) {
-                u.setChip(recChip, "센싱 중", Ui.ACCENT);
-                recDetail.setText(c.status());
-            } else {
-                u.setChip(recChip, "정지됨", err != null ? Ui.DANGER : Ui.NEUTRAL);
-                recDetail.setText(err != null ? "오류: " + err : "시작을 누르면 센서와 GPS를 기록하고 ESP32에 연결합니다");
-            }
             BleLink ble = GuideService.ble;
-            String[] b = (ble != null ? ble.status() : "정지됨").split("\n", 2); // 첫 줄은 상태, 나머지는 로그 경로와 오류
-            u.setChip(bleChip, b[0], chipKind(b[0]));
+            String bleLine = (ble != null ? ble.status() : "정지됨").split("\n", 2)[0];
+            boolean linked = bleLine.startsWith("연결됨");
+
+            bigLabel.setText(c != null ? "센싱 중" : "정지됨");
+            bigSub.setText(c == null ? "시작을 누르면 센서를 기록합니다" : linked ? "IMU 50Hz 전송" : "ESP32 연결 대기");
+            bigDot.getBackground().setTint(c == null ? u.textSub : linked ? u.accent : u.warn);
+
+            sensorState.setText(c != null ? "정상" : err != null ? "오류" : "정지");
+            sensorState.setTextColor(c != null ? u.accent : err != null ? u.danger : u.textSub);
+            bleState.setText(bleLine.startsWith("연결됨") ? "연결됨" : bleLine);
+            bleState.setTextColor(linked ? u.accent : chipDanger(bleLine) ? u.danger : u.textSub);
+
+            recDetail.setText(c != null ? c.status() : err != null ? "오류: " + err : "");
+            String[] b = (ble != null ? ble.status() : "").split("\n", 2);
             bleDetail.setText(b.length > 1 ? b[1] : "");
-            bleDetail.setVisibility(b.length > 1 ? View.VISIBLE : View.GONE);
             main.postDelayed(this, REFRESH_MS);
         }
     };
@@ -54,54 +60,73 @@ public class MainActivity extends Activity {
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         u = new Ui(this);
 
-        Button start = u.button("시작", true);
+        // 큰 상태
+        bigDot = u.dot(u.textSub, 18);
+        bigLabel = u.label("정지됨", 28, u.text, true);
+        bigSub = u.label("", 14, u.textSub, false);
+        LinearLayout big = u.card(null);
+        big.setGravity(Gravity.CENTER_HORIZONTAL);
+        big.setPadding(u.dp(16), u.dp(28), u.dp(16), u.dp(28));
+        big.addView(bigDot);
+        big.addView(bigLabel, u.wrap(12));
+        big.addView(bigSub, u.wrap(6));
+
+        // 센서와 ESP32 상태 두 줄
+        sensorState = u.label("정지", 16, u.textSub, true);
+        bleState = u.label("정지됨", 16, u.textSub, true);
+        LinearLayout rows = u.card(null);
+        rows.addView(stateRow("센서", sensorState));
+        rows.addView(stateRow("ESP32", bleState), u.full(12));
+
+        // 시작 / 종료
+        Button start = u.big("시작", u.text, u.onAccent);
         start.setOnClickListener(v -> startSession());
-        Button stop = u.button("종료", false);
+        Button stop = u.big("종료", u.dangerBg, u.danger);
         stop.setOnClickListener(v -> stopService(new Intent(this, GuideService.class)));
         LinearLayout btns = u.row();
-        btns.addView(start, u.cell(8));
-        btns.addView(stop, u.cell(8));
+        btns.addView(start, u.cell(10));
+        btns.addView(stop, u.cell(10));
 
-        recChip = u.chip();
-        u.setChip(recChip, "정지됨", Ui.NEUTRAL);
+        // 상세: 센서와 GPS 수치, 로그 경로
         recDetail = u.mono("", 13, u.textSub);
-        bleChip = u.chip();
-        u.setChip(bleChip, "정지됨", Ui.NEUTRAL);
         bleDetail = u.mono("", 13, u.textSub);
-
-        LinearLayout rec = u.card("센서 기록");
-        rec.addView(recChip, u.wrap(12));
-        rec.addView(recDetail, u.full(12));
-        LinearLayout bleCard = u.card("ESP32 연결");
-        bleCard.addView(bleChip, u.wrap(12));
-        bleCard.addView(bleDetail, u.full(12));
+        LinearLayout detailBody = new LinearLayout(this);
+        detailBody.setOrientation(LinearLayout.VERTICAL);
+        detailBody.addView(recDetail, u.full(0));
+        detailBody.addView(bleDetail, u.full(8));
+        LinearLayout detail = u.collapsible("상세", detailBody);
 
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setPadding(u.dp(16), u.dp(16), u.dp(16), u.dp(24));
-        col.addView(u.label("ComeBackHome", 26, u.text, true));
-        col.addView(u.label("센싱", 15, u.textSub, false), u.wrap(2));
-        col.addView(btns, u.rowOf(16, 8));
-        col.addView(rec, u.full(16));
-        col.addView(bleCard, u.full(12));
+        col.addView(u.label("센싱", 24, u.text, true));
+        col.addView(big, u.full(16));
+        col.addView(rows, u.full(12));
+        col.addView(btns, u.rowOf(12, 10));
+        col.addView(detail, u.full(16));
 
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(u.bg);
         scroll.setFitsSystemWindows(true);
         scroll.addView(col);
         setContentView(scroll);
-        if (Build.VERSION.SDK_INT >= 30) {
-            int light = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
-                    | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
-            getWindow().getInsetsController().setSystemBarsAppearance(u.night ? 0 : light, light);
+        if (Build.VERSION.SDK_INT >= 30) { // 어두운 배경이라 상태바 글자는 밝게 둔다
+            getWindow().getInsetsController().setSystemBarsAppearance(0,
+                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                            | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
         }
         requestNeededPermissions();
     }
 
-    private static int chipKind(String s) {
-        if (s.startsWith("연결됨")) return Ui.ACCENT;
-        if (s.contains("실패") || s.contains("없음") || s.contains("꺼짐") || s.contains("끊김")) return Ui.DANGER;
-        return Ui.NEUTRAL;
+    private LinearLayout stateRow(String name, TextView state) {
+        LinearLayout r = u.row();
+        r.addView(u.label(name, 16, u.text, false), new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        r.addView(state);
+        return r;
+    }
+
+    private static boolean chipDanger(String s) {
+        return s.contains("실패") || s.contains("없음") || s.contains("꺼짐") || s.contains("끊김");
     }
 
     private void startSession() {
