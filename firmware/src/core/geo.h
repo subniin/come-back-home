@@ -28,23 +28,6 @@ inline float planarBearing(float dx, float dy) {
   return wrap360(atan2f(dx, dy) * RAD2DEG);
 }
 
-// GPS 두 점 사이 거리(m)
-inline double haversineM(double lat1, double lon1, double lat2, double lon2) {
-  const double R = 6371000.0, k = PI_D / 180.0;
-  double dLat = (lat2 - lat1) * k, dLon = (lon2 - lon1) * k;
-  double a = sin(dLat / 2) * sin(dLat / 2) +
-             cos(lat1 * k) * cos(lat2 * k) * sin(dLon / 2) * sin(dLon / 2);
-  return 2 * R * atan2(sqrt(a), sqrt(1 - a));
-}
-// GPS 점1 → 점2 방위각(진북 기준, 0~360)
-inline float gpsBearingDeg(double lat1, double lon1, double lat2, double lon2) {
-  const double k = PI_D / 180.0;
-  double y = sin((lon2 - lon1) * k) * cos(lat2 * k);
-  double x = cos(lat1 * k) * sin(lat2 * k) -
-             sin(lat1 * k) * cos(lat2 * k) * cos((lon2 - lon1) * k);
-  return wrap360((float)(atan2(y, x) / k));
-}
-
 // 상대각(목표방위 - 내 헤딩) → 허리 모터 번호(0~7)
 //  0=정면(배꼽) 1=오른앞 2=오른쪽 3=오른뒤 4=뒤(등) 5=왼뒤 6=왼쪽 7=왼앞
 //  prev: 직전 모터 번호(없으면 255). 경계 근처에서 hyst만큼 기존 값을 유지.

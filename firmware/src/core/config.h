@@ -27,30 +27,12 @@ constexpr float    STEP_LO_G        = 1.00f;
 constexpr uint32_t STEP_MIN_MS      = 300;
 
 // ---------------- 복귀 안내 ----------------
-constexpr float    ARRIVE_RADIUS_M     = 1.0f;  // 웨이포인트 도달 판정 반경 (실내)
-constexpr float    OUTDOOR_ARRIVE_M    = 5.0f;  // 실외 안전지점 도달 판정 반경
-constexpr uint32_t GPS_STALE_MS        = 3000;  // GPS가 이 시간 이상 끊기면 PDR 경로로 대체
-constexpr float    MAG_DECLINATION_DEG = -8.5f; // 자북→진북 보정 (한국은 서편각 약 8~9°, 실측 확인 필요)
-constexpr uint32_t GUIDE_UPDATE_MS     = 100;   // 안내 방향 재계산 주기
-
-// ---------------- 경로 차단 (ToF/초음파, 선택) ----------------
-constexpr float    BLOCK_DIST_M      = 1.2f;
-constexpr uint32_t BLOCK_CONFIRM_MS  = 3000;
-constexpr uint32_t BLOCK_COOLDOWN_MS = 5000;
-
-// ---------------- 통신 (휴대폰 BLE) ----------------
-constexpr uint32_t LINK_LOST_MS              = 3000; // 연결 끊김 확정 시간
-constexpr bool     AUTO_RETURN_ON_LINK_LOSS  = true; // 연결 끊기면 자동으로 복귀 안내 시작
+constexpr float    ARRIVE_RADIUS_M  = 1.0f;  // 웨이포인트 도달 판정 반경
+constexpr uint32_t GUIDE_UPDATE_MS  = 100;   // 안내 방향 재계산 주기
 
 // ---------------- 메모리 ----------------
 constexpr int MAX_NODES = 128;
 constexpr int MAX_EDGES = 192;
-
-// ---------------- 햅틱 인지 실험 모드 ----------------
-constexpr uint32_t TEST_TIMEOUT_MS = 5000;  // 응답 없으면 '무응답' 처리
-constexpr uint32_t TEST_GAP_MIN_MS = 1500;  // 다음 자극까지 랜덤 간격 (예측 방지)
-constexpr uint32_t TEST_GAP_MAX_MS = 3000;
-constexpr int      TEST_MAX_TRIALS = 160;
 
 }  // namespace cfg
 }  // namespace chh

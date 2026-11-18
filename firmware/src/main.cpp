@@ -22,7 +22,7 @@ using namespace chh;
 // 모터 번호: 0=정면(배꼽) 1=오른앞 2=오른쪽 3=오른뒤 4=뒤(등) 5=왼뒤 6=왼쪽 7=왼앞
 // ※ 모터는 반드시 트랜지스터/드라이버(예: ULN2803)를 거쳐 연결. GPIO 직결 금지
 static const uint8_t MOTOR_PINS[8] = {13, 14, 27, 26, 25, 33, 32, 23};
-static const uint8_t BUTTON_PIN = 0;  // DevKit의 BOOT 버튼 (짧게: 시작/복귀/취소, 길게: 실내↔실외)
+static const uint8_t BUTTON_PIN = 0;  // DevKit의 BOOT 버튼 (누를 때마다: 시작 → 복귀 → 취소)
 
 // ---------------- BLE (Nordic UART Service: 'nRF Connect', 'Serial Bluetooth Terminal' 앱으로 바로 테스트) ----
 #define NUS_SERVICE_UUID "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -107,22 +107,11 @@ void setupBle() {
 //  센서 어댑터  ← 센서 담당 코드와 연결할 부분 (지금은 비어 있음 → SIM 명령으로 테스트)
 // ============================================================================
 // accMagG : 가속도 벡터 크기 (g 단위, 정지 시 약 1.0)
-// headingDeg : 0~360, 시계방향.
-//   - 실외: 지자기 기반 자북 헤딩 (진북 보정은 config의 MAG_DECLINATION_DEG에서 처리)
-//   - 실내: 철골 때문에 지자기가 틀어지므로 자이로 적분/센서 융합 헤딩 권장
+// headingDeg : 0~360, 시계방향. 실내는 철골 때문에 지자기가 틀어지므로 자이로 적분/센서 융합 헤딩 권장
+// (현재는 폰 앱이 BLE로 'IMU <accG> <headDeg>'를 보내므로 이 함수는 비어 있어도 됨)
 bool readImu(float& accMagG, float& headingDeg) {
   // TODO: 예) BNO055/MPU9250 등에서 읽기
   (void)accMagG; (void)headingDeg;
-  return false;
-}
-// TODO: TinyGPSPlus 등으로 파싱. 새 데이터가 있을 때 true
-bool readGps(double& lat, double& lon, bool& fix) {
-  (void)lat; (void)lon; (void)fix;
-  return false;
-}
-// 전방 거리(m). ToF/초음파 미사용이면 false 반환 그대로 두면 됨
-bool readTof(float& distM) {
-  (void)distM;
   return false;
 }
 
@@ -139,21 +128,14 @@ void setup() {
 
 void handleButton(uint32_t now) {
   static bool last = HIGH;
-  static uint32_t downAt = 0;
-  static bool longFired = false;
   bool cur = digitalRead(BUTTON_PIN);
   if (cur != last) {
     delay(15);  // 간단 디바운스
     cur = digitalRead(BUTTON_PIN);
     if (cur != last) {
-      if (cur == LOW) { downAt = now; longFired = false; }
-      else if (!longFired) ctrl.onButtonShort(now);
+      if (cur == HIGH) ctrl.onButtonShort(now);  // 뗄 때 1회
       last = cur;
     }
-  }
-  if (cur == LOW && !longFired && now - downAt > 1500) {
-    longFired = true;
-    ctrl.onButtonLong(now);
   }
 }
 
@@ -197,10 +179,7 @@ void loop() {
   CmdMsg m;
   while (xQueueReceive(cmdQueue, &m, 0) == pdTRUE) handleLine(m.s, now);
 
-  // 2) 연결 상태
-  ctrl.onLink(bleConnected, now);
-
-  // 3) 센서 (50Hz)
+  // 2) 센서 (50Hz)
   static uint32_t lastImu = 0;
   if (now - lastImu >= 20) {
     lastImu = now;
@@ -209,16 +188,10 @@ void loop() {
       ctrl.onHeading(head);
       if (stepDet.update(acc, now)) ctrl.onStep(head, now);
     }
-    float d;
-    if (readTof(d)) ctrl.onObstacle(d, now);
   }
-  double lat, lon;
-  bool fix;
-  if (readGps(lat, lon, fix)) ctrl.onGps(lat, lon, fix, now);
-
-  // 4) 버튼
+  // 3) 버튼
   handleButton(now);
 
-  // 5) 상태 갱신 + 진동 출력
+  // 4) 상태 갱신 + 진동 출력
   ctrl.tick(now);
 }
