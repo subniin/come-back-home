@@ -21,8 +21,13 @@ using namespace chh;
 // ---------------- 핀 배치 (하드웨어 담당과 맞출 것) ----------------
 // 모터 번호: 0=정면(배꼽) 1=오른앞 2=오른쪽 3=오른뒤 4=뒤(등) 5=왼뒤 6=왼쪽 7=왼앞
 // ※ 모터는 반드시 트랜지스터/드라이버(예: ULN2803)를 거쳐 연결. GPIO 직결 금지
-static const uint8_t MOTOR_PINS[8] = {13, 14, 27, 26, 25, 33, 32, 23};
-static const uint8_t BUTTON_PIN = 0;  // DevKit의 BOOT 버튼 (누를 때마다: 시작 → 복귀 → 취소)
+static const uint8_t MOTOR_PINS[8] = {32, 13, 27, 14, 26, 33, 25, 23};
+// ※ 각 모터 핀에는 작동 확인용 LED가 같이 연결되어 있다(모터와 함께 켜짐). 코드는 모터만 제어하면 된다.
+static const uint8_t BUTTON_PIN = 0;  // DevKit의 BOOT 버튼 (짧게: 시작/복귀/취소, 길게: 실내↔실외)
+
+// 허리 유닛 조작 스위치 4개 (INPUT_PULLUP, 누르면 LOW). 21/22는 ESP32 기본 I2C 핀이므로 I2C 센서를 쓰면 핀을 옮길 것
+static const uint8_t SWITCH_PINS[4] = {18, 19, 21, 22};
+// 0: 경로 기록 시작(START)  1: 복귀 안내 시작(RETURN)  2: 실내↔실외 전환  3: 복귀 취소(CANCEL)
 
 // ---------------- BLE (Nordic UART Service: 'nRF Connect', 'Serial Bluetooth Terminal' 앱으로 바로 테스트) ----
 #define NUS_SERVICE_UUID "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -34,7 +39,8 @@ StepDetector stepDet;
 
 BLEServer*         bleServer = nullptr;
 BLECharacteristic* txChar = nullptr;
-volatile bool      bleConnected = false;
+volatile bool      bleConnected = false;  // 한 대라도 연결되어 있으면 true
+volatile uint8_t   bleClients = 0;
 
 struct CmdMsg { char s[96]; };
 QueueHandle_t cmdQueue;  // BLE 콜백(다른 태스크) → loop()로 명령 전달
@@ -61,9 +67,15 @@ void logLine(const char* s) {
 }
 
 class ServerCB : public BLEServerCallbacks {
-  void onConnect(BLEServer*) override { bleConnected = true; }
+  // 폰 2대(센싱 앱 + 대시보드 앱)가 동시에 붙는다. 연결 수를 세고 광고를 계속 켜 둔다.
+  void onConnect(BLEServer* s) override {
+    bleClients++;
+    bleConnected = true;
+    s->startAdvertising();  // 이미 한 대 붙어도 다음 폰이 찾을 수 있게
+  }
   void onDisconnect(BLEServer* s) override {
-    bleConnected = false;
+    if (bleClients > 0) bleClients--;
+    bleConnected = bleClients > 0;
     s->startAdvertising();  // 재연결 허용
   }
 };
@@ -120,6 +132,7 @@ void setup() {
   Serial.begin(115200);
   for (uint8_t p : MOTOR_PINS) { pinMode(p, OUTPUT); digitalWrite(p, LOW); }
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  for (uint8_t p : SWITCH_PINS) pinMode(p, INPUT_PULLUP);
 
   cmdQueue = xQueueCreate(8, sizeof(CmdMsg));
   ctrl.begin(motorWrite, logLine);
@@ -128,14 +141,41 @@ void setup() {
 
 void handleButton(uint32_t now) {
   static bool last = HIGH;
+  static uint32_t downAt = 0;
+  static bool longFired = false;
   bool cur = digitalRead(BUTTON_PIN);
   if (cur != last) {
     delay(15);  // 간단 디바운스
     cur = digitalRead(BUTTON_PIN);
     if (cur != last) {
-      if (cur == HIGH) ctrl.onButtonShort(now);  // 뗄 때 1회
+      if (cur == LOW) { downAt = now; longFired = false; }
+      else if (!longFired) ctrl.onButtonShort(now);
       last = cur;
     }
+  }
+  if (cur == LOW && !longFired && now - downAt > 1500) {
+    longFired = true;
+    ctrl.onButtonLong(now);
+  }
+}
+
+// 스위치 4개: 누르는 순간(LOW) 한 번만 동작, 30ms 디바운스. 눌림도 시리얼/BLE 로그로 남김
+void handleSwitches(uint32_t now) {
+  static bool stable[4] = {HIGH, HIGH, HIGH, HIGH}, raw[4] = {HIGH, HIGH, HIGH, HIGH};
+  static uint32_t changedAt[4] = {0};
+  for (int i = 0; i < 4; i++) {
+    bool r = digitalRead(SWITCH_PINS[i]);
+    if (r != raw[i]) { raw[i] = r; changedAt[i] = now; }
+    if (now - changedAt[i] < 30 || raw[i] == stable[i]) continue;
+    stable[i] = raw[i];
+    if (stable[i] != LOW) continue;
+    char msg[32];
+    snprintf(msg, sizeof(msg), "SW,%d,GPIO%d", i + 1, SWITCH_PINS[i]);
+    logLine(msg);
+    if (i == 0) ctrl.onCommand("START", now);
+    else if (i == 1) ctrl.onCommand("RETURN", now);
+    else if (i == 2) ctrl.onButtonLong(now);
+    else ctrl.onCommand("CANCEL", now);
   }
 }
 
@@ -191,6 +231,7 @@ void loop() {
   }
   // 3) 버튼
   handleButton(now);
+  handleSwitches(now);
 
   // 4) 상태 갱신 + 진동 출력
   ctrl.tick(now);
