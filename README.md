@@ -96,7 +96,7 @@ git merge develop
 
 ### 5-1. 앱 (`android/`)
 - Android Studio로 `android/` 폴더를 연다.
-- 고친 소스는 `android/app/src/` 아래에 있다. 이 폴더만 `git add` 한다.
+- 고친 소스는 `android/core`, `android/sensor`, `android/dashboard` 아래에 있다. 이 폴더들만 `git add` 한다.
 - 올리지 않는 것: `build/`, `.gradle/`, `local.properties`, `*.apk`, `*.jks`(서명 키). `.gitignore`가 막아 주지만 `git status`로 한 번 더 확인한다.
 - 실기기 확인은 폰을 USB 또는 무선 디버깅으로 연결한 뒤 Android Studio에서 Run 한다.
 
