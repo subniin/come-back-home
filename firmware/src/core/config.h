@@ -33,6 +33,7 @@ constexpr uint32_t GUIDE_UPDATE_MS  = 100;   // 안내 방향 재계산 주기
 // ---------------- 메모리 ----------------
 constexpr int MAX_NODES = 128;
 constexpr int MAX_EDGES = 192;
+constexpr int MAX_TRAIL = 256;  // 지나온 노드 순서 기록 길이 (같은 노드 재방문 포함)
 
 }  // namespace cfg
 }  // namespace chh

@@ -84,6 +84,11 @@ static void testButtonFlow() {
   Controller c; c.begin(motorWrite, logFn); T = 1000;
   c.onButtonShort(T);
   CHECK(c.phase() == Phase::RECORDING, "버튼 1회 → 기록 시작");
+  c.onButtonLong(T);
+  bool out = c.envMode() == EnvMode::OUTDOOR;
+  c.onButtonLong(T);
+  CHECK(out && c.envMode() == EnvMode::INDOOR && c.phase() == Phase::RECORDING,
+        "길게 누르기 → 실내↔실외 전환 (기록은 그대로 유지)");
   walk(c, 0, 14); walk(c, 90, 10);  // ㄱ자
   c.onButtonShort(T);
   CHECK(c.phase() == Phase::RETURNING && c.guideDir() < 8, "버튼 2회 → 복귀 안내 시작 (방향 모터 지정)");
@@ -93,9 +98,31 @@ static void testButtonFlow() {
   CHECK(c.phase() == Phase::ARRIVED, "출발점 도착");
 }
 
+// 막다른 길 왕복 구간도 지나온 그대로 되짚는지 (최단경로로 건너뛰지 않음)
+static void testDeadEndRetrace() {
+  printf("\n[4] 막다른 길 왕복도 그대로 되짚기\n");
+  Controller c; c.begin(motorWrite, logFn); T = 1000;
+  c.onCommand("START", T);
+  walk(c, 0, 14);    // 북 ~10m
+  walk(c, 90, 11);   // 동 ~8m  (교차점)
+  walk(c, 0, 8);     // 북쪽 막다른 길 ~5.6m
+  walk(c, 180, 8);   // 되돌아옴 → 교차점 노드 재사용
+  walk(c, 90, 8);    // 동 ~5.6m
+  int recorded = 14 + 11 + 8 + 8 + 8;
+  c.onCommand("RETURN", T);
+  printf("    되짚을 노드 순서:");
+  for (int i = 0; i < c.guide().routeLen(); i++) printf(" %d", c.guide().routeAt(i));
+  printf("\n");
+  float h = c.heading();
+  int steps = followGuidance(c, h, 400);
+  printf("    진입 %d걸음, 복귀 %d걸음\n", recorded, steps);
+  CHECK(c.phase() == Phase::ARRIVED, "출발점 도착");
+  CHECK(steps >= recorded - 8, "막다른 길 왕복 구간까지 되짚음 (지름길 없음)");
+}
+
 // 외길에서 BLOCK 명령 → NO_ROUTE 상태 + 전체 진동 신호 (SELFTEST는 진동 출력을 보지 않으므로 여기서 확인)
 static void testNoRouteSignal() {
-  printf("\n[4] 외길 차단 → NO_ROUTE 진동 출력\n");
+  printf("\n[5] 외길 차단 → NO_ROUTE 진동 출력\n");
   Controller c; c.begin(motorWrite, logFn); T = 1000;
   c.onCommand("START", T);
   walk(c, 0, 14); walk(c, 90, 14);
@@ -107,7 +134,7 @@ static void testNoRouteSignal() {
 }
 
 static void testSelfTest() {
-  printf("\n[5] SELFTEST 명령 (내장 PDR 백트래킹 시나리오 4개)\n");
+  printf("\n[6] SELFTEST 명령 (내장 PDR 백트래킹 시나리오 4개)\n");
   CHECK(runPdrSelfTest(logFn, 0) == 0, "4개 시나리오 모두 PASS");
 }
 
@@ -117,6 +144,7 @@ int main(int argc, char** argv) {
   testSector();
   testHaptic();
   testButtonFlow();
+  testDeadEndRetrace();
   testNoRouteSignal();
   testSelfTest();
   printf("\n==== %s (%d failures) ====\n", fails ? "FAILED" : "ALL PASSED", fails);

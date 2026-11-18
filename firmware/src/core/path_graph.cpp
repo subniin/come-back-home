@@ -63,45 +63,6 @@ void PathGraph::unblockAll() {
   for (int i = 0; i < nE_; i++) edges_[i].blocked = false;
 }
 
-int PathGraph::shortestPath(int from, int to, uint8_t* out, int maxLen) const {
-  if (from < 0 || to < 0 || from >= nN_ || to >= nN_) return 0;
-  const float INF = 1e30f;
-  float   dist[cfg::MAX_NODES];
-  int16_t prev[cfg::MAX_NODES];
-  bool    done[cfg::MAX_NODES];
-  for (int i = 0; i < nN_; i++) { dist[i] = INF; prev[i] = -1; done[i] = false; }
-  dist[from] = 0;
-
-  // 노드 수가 작아서(≤128) 우선순위 큐 없이 O(V^2) Dijkstra로 충분
-  for (;;) {
-    int u = -1;
-    float best = INF;
-    for (int i = 0; i < nN_; i++)
-      if (!done[i] && dist[i] < best) { best = dist[i]; u = i; }
-    if (u < 0 || u == to) break;
-    done[u] = true;
-    for (int k = 0; k < nE_; k++) {
-      const GEdge& e = edges_[k];
-      if (e.blocked) continue;
-      int v = (e.a == u) ? e.b : (e.b == u) ? e.a : -1;
-      if (v < 0 || done[v]) continue;
-      float nd = dist[u] + e.len;
-      if (nd < dist[v]) { dist[v] = nd; prev[v] = (int16_t)u; }
-    }
-  }
-  if (dist[to] >= INF) return 0;
-
-  uint8_t tmp[cfg::MAX_NODES];
-  int len = 0;
-  for (int v = to; v != -1; v = prev[v]) {
-    if (len >= cfg::MAX_NODES) return 0;
-    tmp[len++] = (uint8_t)v;
-  }
-  if (len > maxLen) return 0;
-  for (int i = 0; i < len; i++) out[i] = tmp[len - 1 - i];
-  return len;
-}
-
 // ============================ PathRecorder ============================
 void PathRecorder::begin(PathGraph* g, float x, float y, float headingDeg) {
   g_ = g;
@@ -112,12 +73,13 @@ void PathRecorder::begin(PathGraph* g, float x, float y, float headingDeg) {
   enabled_ = true;
   full_ = false;
   curIsTurn_ = true;
+  trailLen_ = 0;
+  pushTrail(cur_);
 }
 
-void PathRecorder::attachPrior(PathGraph* g, int startNode) {
-  g_ = g;
-  cur_ = startNode;
-  enabled_ = false;
+void PathRecorder::pushTrail(int n) {
+  if (trailLen_ >= cfg::MAX_TRAIL) { full_ = true; return; }
+  trail_[trailLen_++] = (uint8_t)n;
 }
 
 void PathRecorder::onStep(float xPrev, float yPrev, float x, float y, float heading) {
@@ -150,10 +112,11 @@ int PathRecorder::commitNode(float x, float y, bool atTurn) {
     if (atTurn && !curIsTurn_) { g_->moveNode(cur_, x, y); curIsTurn_ = true; }
     return cur_;
   }
-  if (near >= 0) {  // 예전에 지나간 지점 → 병합 (루프/되돌아옴)
+  if (near >= 0) {  // 예전에 지나간 지점 → 기존 노드 재사용 (루프/되돌아옴)
     g_->addEdge(cur_, near);
     cur_ = near;
     curIsTurn_ = true;
+    pushTrail(cur_);  // 재방문도 지나온 순서에 그대로 기록
     return cur_;
   }
   int n = g_->addNode(x, y);
@@ -161,6 +124,7 @@ int PathRecorder::commitNode(float x, float y, bool atTurn) {
   if (!g_->addEdge(cur_, n)) full_ = true;
   cur_ = n;
   curIsTurn_ = atTurn;
+  pushTrail(cur_);
   return n;
 }
 

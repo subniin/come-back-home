@@ -74,12 +74,10 @@ void Controller::startMission() {
 
 void Controller::startReturn(uint32_t now) {
   if (phase_ != Phase::RECORDING) { logf("ERR,RECORDING 상태에서만 복귀 시작 가능"); return; }
-  int from = rec_.commitNode(x_, y_, true);  // 현재 위치를 노드로 확정
-  const int goal = 0;                        // 출발 노드
+  rec_.commitNode(x_, y_, true);  // 현재 위치를 마지막 노드로 확정
   phase_ = Phase::RETURNING;
-  ReturnGuide::Status st = guide_.begin(&graph_, from, goal);
-  logf("PHASE,RETURNING,from=%d,goal=%d,route=%d nodes,dist=%.1fm", from, goal,
-       guide_.routeLen(), guide_.remainingM(x_, y_));
+  ReturnGuide::Status st = guide_.begin(&graph_, rec_);  // 지나온 노드 순서를 역순으로
+  logf("PHASE,RETURNING,retrace=%d nodes,dist=%.1fm", guide_.routeLen(), guide_.remainingM(x_, y_));
   if (st == ReturnGuide::Status::NO_ROUTE) { finish(Phase::NO_ROUTE); return; }
   updateGuidance(now);
 }
@@ -125,20 +123,11 @@ void Controller::updateGuidance(uint32_t now) {
 void Controller::handleBlocked(const char* why) {
   if (phase_ != Phase::RETURNING) return;
   int a = guide_.lastPassed(), b = guide_.nextWaypoint();
-  ReturnGuide::BlockResult r = guide_.onBlocked();
-  if (r == ReturnGuide::BlockResult::IGNORED) {
-    logf("BLOCK,ignored,%s (차단 간선 판단 불가)", why);
-    return;
-  }
+  if (guide_.onBlocked() == ReturnGuide::BlockResult::IGNORED) return;
+  // 되짚을 길이 막힘 → 다른 길은 찾지 않고 경로 없음
   belt_.playOnce(Signal::BLOCKED);
-  if (r == ReturnGuide::BlockResult::REROUTED) {
-    logf("BLOCK,%s,edge=%d-%d,rerouted,route=%d nodes,dist=%.1fm", why, a, b, guide_.routeLen(),
-         guide_.remainingM(x_, y_));
-    guideDir_ = 255;
-  } else {
-    logf("BLOCK,%s,edge=%d-%d,no alternative", why, a, b);
-    finish(Phase::NO_ROUTE);
-  }
+  logf("BLOCK,%s,edge=%d-%d,retrace blocked", why, a, b);
+  finish(Phase::NO_ROUTE);
 }
 
 // =============================== 버튼 ===============================
@@ -148,6 +137,14 @@ void Controller::onButtonShort(uint32_t now) {
     case Phase::RECORDING: startReturn(now); break;
     default:               cancelReturn(); break;
   }
+}
+
+// 길게 누르기: 실내 ↔ 실외 전환
+//  ※ 실외 GPS 안내는 범위에서 제외했으므로, 지금은 모드 값만 바뀌고 안내 방식은 둘 다 PDR 되짚기
+void Controller::onButtonLong(uint32_t) {
+  env_ = (env_ == EnvMode::INDOOR) ? EnvMode::OUTDOOR : EnvMode::INDOOR;
+  belt_.playOnce(Signal::CONFIRM);
+  logf("ENV,%s", env_ == EnvMode::INDOOR ? "INDOOR" : "OUTDOOR");
 }
 
 // =============================== 명령어 ===============================
@@ -205,8 +202,8 @@ void Controller::onCommand(const char* line, uint32_t now) {
 }
 
 void Controller::status() {
-  logf("STATUS,phase=%s,pos=(%.2f,%.2f),heading=%.1f,nodes=%d,edges=%d,guide=%d,haptic=%s",
-       phaseName(phase_), x_, y_, heading_, graph_.nodeCount(), graph_.edgeCount(), guideDir_,
+  logf("STATUS,phase=%s,env=%s,pos=(%.2f,%.2f),heading=%.1f,nodes=%d,edges=%d,guide=%d,haptic=%s",
+       phaseName(phase_), env_ == EnvMode::INDOOR ? "IN" : "OUT", x_, y_, heading_, graph_.nodeCount(), graph_.edgeCount(), guideDir_,
        signalName(belt_.background()));
 }
 

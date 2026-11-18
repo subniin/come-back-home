@@ -28,9 +28,9 @@ static const int BLOCK_LAST_EDGE = -2;
 
 // 시나리오 1: ㄱ자 경로 (앞 9.8m → 오른쪽 7m)
 static const Leg PATH_L[] = {{0, 14}, {90, 10}};
-// 시나리오 2: 막다른 길 탐색 후 계속 진행 (복귀 때 막다른 길 왕복을 건너뛰어야 함)
+// 시나리오 2: 막다른 길 탐색 후 계속 진행 (복귀 때 막다른 길 왕복도 그대로 되짚어야 함)
 static const Leg PATH_DEAD_END[] = {{0, 14}, {90, 11}, {0, 8}, {180, 8}, {90, 8}};
-// 시나리오 3: 사각형 순환로 한 바퀴 + 다시 진입 (차단되면 반대쪽으로 돌아가야 함)
+// 시나리오 3: 사각형 순환로 한 바퀴 + 다시 진입 (되짚던 길이 막히면 다른 길로 가지 않고 NO_ROUTE)
 static const Leg PATH_LOOP[] = {{0, 14}, {90, 14}, {180, 14}, {270, 14}, {0, 14}, {90, 7}};
 // 시나리오 4: 외길 (차단되면 갈 길이 없어야 함)
 static const Leg PATH_ONE_WAY[] = {{0, 14}, {90, 14}};
@@ -46,8 +46,8 @@ struct Scenario {
 #define LEGS(a) a, (int)(sizeof(a) / sizeof(a[0]))
 static const Scenario SCENARIOS[] = {
     {"L-shape",            LEGS(PATH_L),        NO_BLOCK,        true},
-    {"dead-end skip",      LEGS(PATH_DEAD_END), NO_BLOCK,        true},
-    {"loop + block",       LEGS(PATH_LOOP),     BLOCK_LAST_EDGE, true},
+    {"dead-end retrace",   LEGS(PATH_DEAD_END), NO_BLOCK,        true},
+    {"loop + block",       LEGS(PATH_LOOP),     BLOCK_LAST_EDGE, false},
     {"one-way + block",    LEGS(PATH_ONE_WAY),  5,               false},
 };
 static const int N_SCENARIOS = (int)(sizeof(SCENARIOS) / sizeof(SCENARIOS[0]));
@@ -100,12 +100,12 @@ static bool runOne(LogFn log, int idx) {
   for (int i = 0; i < s_graph.nodeCount(); i++)
     logf(log, "  NODE %d (%.2f, %.2f)%s", i, s_graph.node(i).x, s_graph.node(i).y, i == 0 ? "  <- start" : "");
 
-  // ---------- 2) 복귀 시작: 최단 경로 계산 ----------
-  int from = s_rec.commitNode(x, y, true);
-  ReturnGuide::Status st = s_guide.begin(&s_graph, from, 0);
+  // ---------- 2) 복귀 시작: 지나온 노드 순서를 역순으로 ----------
+  s_rec.commitNode(x, y, true);
+  ReturnGuide::Status st = s_guide.begin(&s_graph, s_rec);
   {
     char buf[160];
-    int n = snprintf(buf, sizeof(buf), "RETURN,route=");
+    int n = snprintf(buf, sizeof(buf), "RETURN,retrace=");
     for (int i = 0; i < s_guide.routeLen() && n < (int)sizeof(buf) - 8; i++)
       n += snprintf(buf + n, sizeof(buf) - n, i ? "->%d" : "%d", s_guide.routeAt(i));
     snprintf(buf + n, sizeof(buf) - n, ",dist=%.1fm", s_guide.remainingM(x, y));
@@ -128,8 +128,7 @@ static bool runOne(LogFn log, int idx) {
       blocked = true;
       int a = s_guide.lastPassed(), b = s_guide.nextWaypoint();
       ReturnGuide::BlockResult r = s_guide.onBlocked();
-      const char* rs = r == ReturnGuide::BlockResult::REROUTED ? "REROUTED"
-                     : r == ReturnGuide::BlockResult::NO_ROUTE ? "NO_ROUTE" : "IGNORED";
+      const char* rs = r == ReturnGuide::BlockResult::NO_ROUTE ? "NO_ROUTE" : "IGNORED";
       logf(log, "BLOCK at return step %d, edge %d-%d -> %s, new dist=%.1fm", retSteps, a, b, rs,
            s_guide.remainingM(x, y));
       lastDir = 255;
@@ -153,7 +152,9 @@ static bool runOne(LogFn log, int idx) {
   // ---------- 4) 판정 ----------
   float err = dist2d(x, y, 0, 0);
   bool arrived = (st == ReturnGuide::Status::ARRIVED);
-  bool pass = arrived == sc.expectArrive && (!arrived || err <= cfg::ARRIVE_RADIUS_M + 0.1f);
+  // 되짚기 확인: 지나온 노드를 하나도 건너뛰지 않고 전부 지났는지 (도착한 경우)
+  bool retraced = !arrived || s_guide.routeIndex() == s_guide.routeLen();
+  bool pass = arrived == sc.expectArrive && retraced && (!arrived || err <= cfg::ARRIVE_RADIUS_M + 0.1f);
   logf(log, "RESULT,%s,return_steps=%d (enter %d),end_error=%.2fm,expected=%s -> %s",
        arrived ? "ARRIVED" : (st == ReturnGuide::Status::NO_ROUTE ? "NO_ROUTE" : "TIMEOUT"), retSteps, inSteps,
        err, sc.expectArrive ? "ARRIVED" : "NO_ROUTE", pass ? "PASS" : "FAIL");
