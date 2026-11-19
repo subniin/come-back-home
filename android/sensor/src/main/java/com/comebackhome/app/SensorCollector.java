@@ -18,6 +18,8 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Locale;
 
+import com.comebackhome.app.core.Heading;
+
 /**
  * 센서(50Hz)와 GPS(1Hz)를 전용 스레드에서 수집해 CSV로 기록한다.
  * 로그 파일은 이 스레드에서만 쓴다.
@@ -29,8 +31,12 @@ import java.util.Locale;
  */
 final class SensorCollector implements SensorEventListener, LocationListener {
     private static final int PERIOD_US = 20_000; // 50Hz
-    /** ESP32로 보내는 헤딩 출처. false = ROTATION_VECTOR(자북 기준), true = GAME_ROTATION_VECTOR(실내 상대 헤딩, 시작 방향이 임의) */
-    static final boolean HEADING_FROM_GAME_RV = false;
+    /**
+     * ESP32로 보내는 헤딩 = GAME_ROTATION_VECTOR(자이로 기반, 실내 자기장 왜곡 없음) + 시작 직후 자북과 맞춘 고정 오프셋.
+     * 정렬은 시작 후 ALIGN_SAMPLES개(약 2초) 동안 ROTATION_VECTOR와 비교해 한 번만 한다.
+     * 그래서 가능하면 건물 밖, 금속에서 떨어진 곳에서 시작한다. GAME_ROTATION_VECTOR가 없는 기기는 ROTATION_VECTOR를 그대로 쓴다.
+     */
+    private static final int ALIGN_SAMPLES = 100;
     private static final int[] TYPES = {
             Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_GYROSCOPE, Sensor.TYPE_MAGNETIC_FIELD,
             Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GAME_ROTATION_VECTOR};
@@ -42,7 +48,9 @@ final class SensorCollector implements SensorEventListener, LocationListener {
     private final CsvLog sensorLog, gpsLog;
 
     private final long startNs = SystemClock.elapsedRealtimeNanos();
-    private final float[] rot = new float[9], orient = new float[3];
+    private final Heading.Aligner aligner = new Heading.Aligner(ALIGN_SAMPLES);
+    private double rvDeg = Double.NaN; // 센서 스레드 전용
+    private boolean hasGrv;
 
     // 화면 표시용: 센서 스레드가 쓰고 메인 스레드가 읽는다
     private volatile long accCount;
@@ -72,6 +80,7 @@ final class SensorCollector implements SensorEventListener, LocationListener {
             else sensors.registerListener(this, s, PERIOD_US, handler);
         }
         missing = miss.toString();
+        hasGrv = sensors.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR) != null;
         location.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000, 0f, this, thread.getLooper());
     }
 
@@ -95,12 +104,17 @@ final class SensorCollector implements SensorEventListener, LocationListener {
             accCount++;
             accG = (float) (Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) / SensorManager.GRAVITY_EARTH);
         } else if (type == Sensor.TYPE_ROTATION_VECTOR || type == Sensor.TYPE_GAME_ROTATION_VECTOR) {
-            // 허리 장착 방향이 정해지면 remapCoordinateSystem을 추가한다
-            SensorManager.getRotationMatrixFromVector(rot, v);
-            SensorManager.getOrientation(rot, orient);
-            float deg = (float) Math.toDegrees(orient[0]);
-            if (type == Sensor.TYPE_ROTATION_VECTOR) azimuthDeg = deg; // 화면 확인용
-            if ((type == Sensor.TYPE_GAME_ROTATION_VECTOR) == HEADING_FROM_GAME_RV) headingDeg = (deg + 360f) % 360f;
+            // 폰을 눕히든 세우든(화면이 몸 쪽) 몸 정면 헤딩이 나온다 (core/Heading 참고)
+            double deg = Heading.forwardDeg(v[0], v[1], v[2], v.length > 3 ? v[3] : Double.NaN);
+            if (Double.isNaN(deg)) return; // 정면을 정할 수 없는 자세 → 직전 값 유지
+            if (type == Sensor.TYPE_ROTATION_VECTOR) {
+                rvDeg = deg;
+                azimuthDeg = (float) deg; // 화면 확인용 (자북)
+                if (!hasGrv) headingDeg = (float) deg;
+            } else {
+                aligner.add(rvDeg, deg);
+                if (aligner.ready()) headingDeg = (float) aligner.apply(deg);
+            }
         }
     }
 
@@ -145,8 +159,9 @@ final class SensorCollector implements SensorEventListener, LocationListener {
                         f.getAccuracy(), (now - f.getElapsedRealtimeNanos()) / 1e9);
         String err = sensorLog.error != null ? sensorLog.error : gpsLog.error;
         return String.format(Locale.US,
-                "기록 %.0f초\n가속도 평균 %.1fHz\n방위각 %.0f°\nGPS %s\n미지원 센서: %s\n오류: %s\n저장: %s",
-                sec, accCount / sec, azimuthDeg, gps,
+                "기록 %.0f초\n가속도 평균 %.1fHz\n방위각 %.0f° / 전송 헤딩 %s\nGPS %s\n미지원 센서: %s\n오류: %s\n저장: %s",
+                sec, accCount / sec, azimuthDeg,
+                Float.isNaN(headingDeg) ? "정렬 중" : String.format(Locale.US, "%.0f°", headingDeg), gps,
                 missing.isEmpty() ? "없음" : missing, err == null ? "없음" : err, dir);
     }
 

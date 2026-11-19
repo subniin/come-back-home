@@ -36,6 +36,7 @@ static const uint8_t SWITCH_PINS[4] = {18, 19, 21, 22};
 
 Controller   ctrl;
 StepDetector stepDet;
+StepHeading  stepHead;  // 걸음마다 직전 2걸음 헤딩 평균을 넘긴다
 
 BLEServer*         bleServer = nullptr;
 BLECharacteristic* txChar = nullptr;
@@ -203,7 +204,8 @@ void handleLine(const char* line, uint32_t now) {
     float head = strtof(p, &end);
     if (end == p) return;
     ctrl.onHeading(head);
-    if (stepDet.update(acc, now)) ctrl.onStep(head, now);
+    stepHead.add(head);
+    if (stepDet.update(acc, now)) ctrl.onStep(stepHead.onStep(head), now);
     return;
   }
   ctrl.onCommand(line, now);
@@ -240,7 +242,8 @@ void loop() {
     float acc, head;
     if (readImu(acc, head)) {
       ctrl.onHeading(head);
-      if (stepDet.update(acc, now)) ctrl.onStep(head, now);
+      stepHead.add(head);
+      if (stepDet.update(acc, now)) ctrl.onStep(stepHead.onStep(head), now);
     }
     float d;
     if (readTof(d)) ctrl.onObstacle(d, now);
