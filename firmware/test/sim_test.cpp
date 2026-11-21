@@ -133,8 +133,33 @@ static void testNoRouteSignal() {
   CHECK(c.belt().background() == Signal::NO_ROUTE, "NO_ROUTE 진동(전체 길게 반복) 출력");
 }
 
+// 모터 배선 시험 명령: DIR k → k번 모터만 진동, OFF → 전체 끄기 (복귀 안내가 덮어쓰지 않음)
+static void testMotorCommands() {
+  printf("\n[6] 모터 시험 명령 DIR / OFF\n");
+  Controller c; c.begin(motorWrite, logFn); T = 1000;
+  bool ok = true;
+  for (int k = 0; k < 8; k++) {
+    char cmd[8]; snprintf(cmd, sizeof(cmd), "DIR %d", k);
+    c.onCommand(cmd, T);
+    for (int i = 0; i < 4; i++) { T += 20; c.tick(T); }  // 진동 ON 구간
+    for (int m = 0; m < 8; m++) if (((motors >> m) & 1) != (m == k)) ok = false;
+  }
+  CHECK(ok, "DIR 0~7: 지정한 모터 1개만 진동");
+  c.onCommand("OFF", T); T += 20; c.tick(T);
+  bool off = true; for (int m = 0; m < 8; m++) if ((motors >> m) & 1) off = false;
+  CHECK(off && c.belt().background() == Signal::NONE, "OFF: 전체 모터 꺼짐");
+  // 복귀 중에도 DIR 시험이 안내 진동에 덮어써지지 않는지
+  c.onCommand("START", T); walk(c, 0, 14); c.onCommand("RETURN", T);
+  c.onCommand("DIR 3", T);
+  for (int i = 0; i < 10; i++) { T += 100; c.tick(T); }
+  CHECK(c.belt().background() == Signal::DIRECTION && c.belt().backgroundDir() == 3, "복귀 중 DIR 3 유지 (안내가 덮어쓰지 않음)");
+  c.onCommand("OFF", T);
+  for (int i = 0; i < 3; i++) { T += 100; c.tick(T); }
+  CHECK(c.guideDir() < 8 && c.belt().background() == Signal::DIRECTION, "OFF 뒤 복귀 안내 진동 다시 나옴");
+}
+
 static void testSelfTest() {
-  printf("\n[6] SELFTEST 명령 (내장 PDR 백트래킹 시나리오 4개)\n");
+  printf("\n[7] SELFTEST 명령 (내장 PDR 백트래킹 시나리오 4개)\n");
   CHECK(runPdrSelfTest(logFn, 0) == 0, "4개 시나리오 모두 PASS");
 }
 
@@ -146,6 +171,7 @@ int main(int argc, char** argv) {
   testButtonFlow();
   testDeadEndRetrace();
   testNoRouteSignal();
+  testMotorCommands();
   testSelfTest();
   printf("\n==== %s (%d failures) ====\n", fails ? "FAILED" : "ALL PASSED", fails);
   return fails ? 1 : 0;

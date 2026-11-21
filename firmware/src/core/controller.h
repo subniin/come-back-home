@@ -70,6 +70,7 @@ class Controller {
   uint8_t guideDir_ = 255;
   uint32_t lastGuideMs_ = 0;
   bool track_ = false;
+  bool motorTest_ = false;  // DIR 시험 중: 복귀 안내가 진동을 덮어쓰지 않도록 잠시 멈춤 (OFF로 해제)
 };
 
 }  // namespace chh

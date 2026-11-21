@@ -63,6 +63,7 @@ void Controller::onStep(float h, uint32_t now) {
 
 // =============================== 미션 ===============================
 void Controller::startMission() {
+  motorTest_ = false;
   belt_.allOff();
   guideDir_ = 255;
   x_ = 0; y_ = 0;
@@ -105,6 +106,7 @@ void Controller::finish(Phase p) {
 }
 
 void Controller::setGuideDir(uint8_t d) {
+  if (motorTest_) return;  // 모터 시험 중에는 안내 진동을 내보내지 않음
   if (d != guideDir_) logf("GUIDE,dir=%u,wp=%d,remain=%.1fm", d, guide_.nextWaypoint(), guide_.remainingM(x_, y_));
   guideDir_ = d;
   belt_.setBackground(Signal::DIRECTION, d);
@@ -170,6 +172,7 @@ void Controller::onCommand(const char* line, uint32_t now) {
     logf("SIM STEP heading [n] | SIM HEAD h");
     logf("STATUS | DUMP | TRACK ON/OFF");
     logf("SELFTEST [1-%d] | SELFTEST NOISE deg   (PDR 백트래킹 알고리즘 자가 테스트)", pdrSelfTestCount());
+    logf("DIR 0-7 | OFF   (모터 배선 시험: 지정한 방향 모터 진동 / 전체 끄기)");
   }
   // ---- 미션 ----
   else if (eq(c, "START"))  startMission();
@@ -179,6 +182,20 @@ void Controller::onCommand(const char* line, uint32_t now) {
     if (phase_ == Phase::RECORDING && rec_.recording()) logf("MARK,node=%d", rec_.commitNode(x_, y_, true));
   }
   else if (eq(c, "BLOCK")) handleBlocked("manual");
+  // ---- 모터 배선 시험 (대시보드 앱 개발자 메뉴에서도 사용) ----
+  else if (eq(c, "DIR") && n >= 2) {
+    int d = (int)num(1, -1);
+    if (d < 0 || d > 7) { logf("ERR,DIR 0~7"); return; }
+    motorTest_ = true;
+    belt_.setBackground(Signal::DIRECTION, (uint8_t)d);
+    logf("MOTOR,DIR,%d", d);
+  }
+  else if (eq(c, "OFF")) {
+    motorTest_ = false;
+    belt_.allOff();
+    guideDir_ = 255;  // 복귀 중이었다면 다음 갱신 때 안내 진동이 다시 나옴
+    logf("MOTOR,OFF");
+  }
   // ---- 책상 위 시뮬레이션 (센서 없이 알고리즘 확인용) ----
   else if (eq(c, "SIM") && n >= 2) {
     const char* s = tok[1];
