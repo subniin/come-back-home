@@ -9,6 +9,8 @@ import android.content.pm.ServiceInfo;
 import android.os.IBinder;
 import android.os.PowerManager;
 
+import com.comebackhome.app.core.LineProtocol;
+
 import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
@@ -19,6 +21,8 @@ import java.util.Locale;
 public class GuideService extends Service {
     private static final String CHANNEL = "guide";
 
+    /** 화면 표시용. 서비스가 도는 동안만 non-null */
+    static volatile BleLink ble;
     /** 화면 표시용. 기록 중일 때만 non-null */
     static volatile SensorCollector collector;
     /** 마지막 시작 실패 사유. 화면 표시용 */
@@ -33,7 +37,7 @@ public class GuideService extends Service {
         getSystemService(NotificationManager.class).createNotificationChannel(
                 new NotificationChannel(CHANNEL, "기록", NotificationManager.IMPORTANCE_LOW));
         Notification n = new Notification.Builder(this, CHANNEL)
-                .setContentTitle("ComeBackHome 기록 중")
+                .setContentTitle("ComeBackHome 센싱 중")
                 .setSmallIcon(android.R.drawable.ic_menu_mylocation)
                 .setOngoing(true)
                 .build();
@@ -49,6 +53,13 @@ public class GuideService extends Service {
             c.start();
             collector = c;
             lastError = null;
+            BleLink b = new BleLink(this);
+            b.setImuSource(() -> { // 센서 값이 준비되면 IMU 줄을 만든다
+                float acc = c.accG(), head = c.headingDeg();
+                return Float.isNaN(acc) || Float.isNaN(head) ? null : LineProtocol.imuLine(acc, head);
+            });
+            ble = b;
+            b.connect(); // 끊기면 BleLink가 스스로 재연결한다
         } catch (IOException e) {
             lastError = e.toString();
             stopSelf();
@@ -60,6 +71,9 @@ public class GuideService extends Service {
     public void onDestroy() {
         SensorCollector c = collector;
         collector = null;
+        BleLink b = ble;
+        ble = null;
+        if (b != null) b.disconnect();
         if (c != null) c.stop();
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         super.onDestroy();

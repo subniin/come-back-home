@@ -34,6 +34,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * 허리 ESP32와 BLE 연결. 폰이 Central. ESP32 펌웨어(main.cpp)의 Nordic UART Service(NUS)를 쓴다.
@@ -44,7 +45,7 @@ import java.util.UUID;
  * 모든 상태 변경은 메인 스레드에서 한다.
  */
 @SuppressLint("MissingPermission") // 권한은 MainActivity에서 확인한 뒤 호출한다
-final class BleLink {
+public final class BleLink {
     static final UUID SERVICE = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
     static final UUID RX_CHAR = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E"); // 앱 → 기기
     static final UUID TX_CHAR = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E"); // 기기 → 앱
@@ -54,7 +55,7 @@ final class BleLink {
     private static final int MAX_QUEUE = 32;
 
     /** 기기에서 온 한 줄. 메인 스레드에서 호출된다 */
-    interface LineListener {
+    public interface LineListener {
         void onLine(String line);
     }
 
@@ -73,38 +74,44 @@ final class BleLink {
     private int sent, failed, lines, retries;
 
     private LineListener listener;
+    private Supplier<String> imuSource;
     private final ArrayDeque<String> commands = new ArrayDeque<>();
     private final LineProtocol.LineAssembler assembler = new LineProtocol.LineAssembler();
 
     /** 화면 표시용. 메인 스레드가 쓰고 메인 스레드가 읽는다 */
     private volatile String status = "정지됨";
 
-    BleLink(Context ctx) {
+    public BleLink(Context ctx) {
         this.ctx = ctx;
     }
 
-    void setLineListener(LineListener l) {
+    public void setLineListener(LineListener l) {
         listener = l;
+    }
+
+    /** 20ms마다 호출되어 'IMU ...' 줄을 돌려준다. 보낼 값이 없으면 null. 대시보드는 설정하지 않는다 */
+    public void setImuSource(Supplier<String> s) {
+        imuSource = s;
     }
 
     /**
      * 명령 한 줄을 보낸다 (개행은 자동으로 붙인다). 메인 스레드에서 호출한다.
      * 연결 전이면 버리고 false. 쓰기 실패한 명령은 재시도하지 않는다.
      */
-    boolean send(String cmd) {
+    public boolean send(String cmd) {
         if (rx == null || commands.size() >= MAX_QUEUE) return false;
         commands.add(cmd);
         return true;
     }
 
-    String status() {
+    public String status() {
         String err = logError != null ? logError : events != null ? events.error() : null;
         return status
                 + (logDir != null ? "\n로그: " + logDir : "")
                 + (err != null ? "\n로그 오류: " + err : "");
     }
 
-    void connect() {
+    public void connect() {
         if (wantConnected) return; // 이미 스캔 중, 연결 중, 재연결 대기 중
         BluetoothAdapter adapter = ctx.getSystemService(BluetoothManager.class).getAdapter();
         if (adapter == null || !adapter.isEnabled()) {
@@ -146,7 +153,7 @@ final class BleLink {
         ev("ble", "scan");
     }
 
-    void disconnect() {
+    public void disconnect() {
         wantConnected = false;
         main.removeCallbacks(reconnect);
         main.removeCallbacks(sendLoop);
@@ -303,9 +310,8 @@ final class BleLink {
             if (cmd != null) {
                 out = cmd;
                 ev("tx", cmd);
-            } else if (GuideService.collector != null) { // 센서 기록 중일 때만 IMU 송신
-                float acc = GuideService.collector.accG(), head = GuideService.collector.headingDeg();
-                if (!Float.isNaN(acc) && !Float.isNaN(head)) out = LineProtocol.imuLine(acc, head);
+            } else if (imuSource != null) { // 센싱 앱만 설정한다. null을 돌려주면 보낼 IMU 없음
+                out = imuSource.get();
             }
             if (out != null) {
                 if (write((out + "\n").getBytes(StandardCharsets.UTF_8))) sent++;

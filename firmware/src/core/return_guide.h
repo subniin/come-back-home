@@ -1,4 +1,7 @@
-// 복귀 안내: 그래프 위 최단경로를 웨이포인트 단위로 따라가며 "지금 어느 방향 모터를 울릴지" 계산
+// 복귀 안내(백트래킹): 지나온 노드 순서를 역순으로 되짚으며 "지금 어느 방향 모터를 울릴지" 계산
+//  - 복귀 경로 = 기록기(PathRecorder)의 trail을 거꾸로 뒤집은 것 (최단경로가 아님)
+//  - 막다른 길 왕복 구간도 지나온 그대로 다시 지나감
+//  - 되짚을 길이 막히면 다른 길을 찾지 않고 NO_ROUTE
 #pragma once
 #include <stdint.h>
 #include "config.h"
@@ -9,12 +12,13 @@ namespace chh {
 class ReturnGuide {
  public:
   enum class Status : uint8_t { GUIDING, ARRIVED, NO_ROUTE };
-  enum class BlockResult : uint8_t { REROUTED, NO_ROUTE, IGNORED };
+  enum class BlockResult : uint8_t { NO_ROUTE, IGNORED };
 
-  Status begin(PathGraph* g, int fromNode, int goalNode);
+  // rec의 trail(출발→현재)을 뒤집어 복귀 경로(현재→출발)로 만든다
+  Status begin(PathGraph* g, const PathRecorder& rec);
   // 현재 위치·헤딩 → 상태와 모터 번호(dirOut, 0~7)
   Status update(float x, float y, float headingDeg, uint8_t& dirOut);
-  // 전방 차단: 지금 가던 간선을 막고, 마지막으로 지난 노드로 되돌아가 다른 길 탐색(백트래킹)
+  // 되짚던 길이 막힘: 그 간선을 막힘으로 표시하고 NO_ROUTE
   BlockResult onBlocked();
 
   int  nextWaypoint() const { return (idx_ < len_) ? route_[idx_] : -1; }
@@ -25,10 +29,9 @@ class ReturnGuide {
   float remainingM(float x, float y) const;
 
  private:
-  bool replan(int from);
   PathGraph* g_ = nullptr;
-  uint8_t route_[cfg::MAX_NODES];
-  int len_ = 0, idx_ = 0, goal_ = 0, lastPassed_ = -1;
+  uint8_t route_[cfg::MAX_TRAIL];
+  int len_ = 0, idx_ = 0, lastPassed_ = -1;
   uint8_t sector_ = 255;
   Status status_ = Status::NO_ROUTE;
 };

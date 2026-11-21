@@ -36,12 +36,12 @@ final class PathView extends View {
         line.setStyle(Paint.Style.STROKE);
         line.setStrokeWidth(3 * dp);
         line.setStrokeJoin(Paint.Join.ROUND);
-        line.setColor(u.accent);
-        dot.setColor(u.accent);
+        line.setColor(u.text);
+        dot.setColor(u.warn);
         ring.setStyle(Paint.Style.STROKE);
         ring.setStrokeWidth(2 * dp);
         ring.setColor(u.textSub);
-        arrow.setColor(u.danger);
+        arrow.setColor(u.warn);
         setBackground(null);
     }
 
